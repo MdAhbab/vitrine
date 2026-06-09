@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+Disallow: /#/admin-login
+Disallow: /#/dashboard
+
+Sitemap: https://vitrine.app/sitemap.xml

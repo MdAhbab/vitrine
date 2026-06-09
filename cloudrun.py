@@ -3,7 +3,7 @@
 Vitrine — native CLOUD VM deploy (no Docker).
 
 Targets a single Ubuntu/Debian VM and brings up the whole stack as
-systemd units behind nginx + TLS. Implements backend.md §14.
+systemd units behind Caddy/nginx + TLS. Implements backend.md §14.
 
 Sub-commands:
     python cloudrun.py deploy --domain vitrine.example.com [--seed] [--workers 3]
@@ -19,7 +19,7 @@ Global flags:
     --user        service user (default vitrine)
 
 Run on the VM as a sudo-capable user. No Docker — gunicorn/uvicorn workers
-managed by systemd, static frontend + reverse proxy by nginx.
+managed by systemd, static frontend + reverse proxy by Caddy/nginx.
 """
 from __future__ import annotations
 
@@ -31,24 +31,42 @@ import sys
 import textwrap
 from pathlib import Path
 
-# Port map mirrors backend.md §2 / run.py. Internal services bind to
-# 127.0.0.1; only nginx (443/80) is public.
-SERVICES: dict[str, tuple[str, int]] = {
-    "gateway":         ("backend.gateway.app:app",                8000),
-    "identity":        ("backend.services.identity.app:app",      8001),
-    "catalog":         ("backend.services.catalog.app:app",       8002),
-    "search":          ("backend.services.search.app:app",        8003),
-    "orders":          ("backend.services.orders.app:app",        8004),
-    "notifications":   ("backend.services.notifications.app:app", 8005),
-    "hosting":         ("backend.services.hosting.app:app",       8006),
-    "reviews":         ("backend.services.reviews.app:app",       8007),
-    "chats":           ("backend.services.chats.app:app",         8008),
-    "ai-orchestrator": ("backend.ai.app:app",                     8010),
+SERVICE_TARGETS: dict[str, str] = {
+    "gateway": "backend.gateway.app:app",
+    "identity": "backend.services.identity.app:app",
+    "catalog": "backend.services.catalog.app:app",
+    "search": "backend.services.search.app:app",
+    "orders": "backend.services.orders.app:app",
+    "notifications": "backend.services.notifications.app:app",
+    "hosting": "backend.services.hosting.app:app",
+    "reviews": "backend.services.reviews.app:app",
+    "chats": "backend.services.chats.app:app",
+    "ai-orchestrator": "backend.ai.app:app",
 }
+
+SERVICES: dict[str, tuple[str, int]] = {}
+PROXY = "caddy"
+DEFAULT_GATEWAY_PORT = 18000
 
 DRY = False
 APP_DIR = Path("/opt/vitrine")
 APP_USER = "vitrine"
+
+
+def build_services(gateway_port: int) -> dict[str, tuple[str, int]]:
+    ports = {
+        "gateway": gateway_port,
+        "identity": gateway_port + 1,
+        "catalog": gateway_port + 2,
+        "search": gateway_port + 3,
+        "orders": gateway_port + 4,
+        "notifications": gateway_port + 5,
+        "hosting": gateway_port + 6,
+        "reviews": gateway_port + 7,
+        "chats": gateway_port + 8,
+        "ai-orchestrator": gateway_port + 10,
+    }
+    return {name: (target, ports[name]) for name, target in SERVICE_TARGETS.items()}
 
 
 # ----- helpers ----------------------------------------------------------------
@@ -71,8 +89,8 @@ def run(cmd: list[str] | str, *, shell: bool = False, check: bool = True) -> int
     return subprocess.run(cmd, shell=shell, check=check).returncode
 
 
-def sudo(cmd: list[str]) -> int:
-    return run(["sudo", *cmd])
+def sudo(cmd: list[str], *, check: bool = True) -> int:
+    return run(["sudo", *cmd], check=check)
 
 
 def write_file(path: Path, content: str, *, root: bool = False, mode: str | None = None) -> None:
@@ -88,6 +106,15 @@ def write_file(path: Path, content: str, *, root: bool = False, mode: str | None
     if mode:
         (sudo if root else run)(["chmod", mode, str(path)])
     ok(f"wrote {path}")
+
+
+def write_file_as_user(path: Path, content: str, user: str) -> None:
+    if DRY:
+        print(c(f"  [dry-run] write {path} as {user} ({len(content)} bytes)", "90"))
+        return
+    p = subprocess.Popen(["sudo", "-u", user, "tee", str(path)], stdin=subprocess.PIPE)
+    p.communicate(content.encode())
+    ok(f"wrote {path} as {user}")
 
 
 def require_linux() -> None:
@@ -152,7 +179,7 @@ def ai_worker_template() -> str:
     """)
 
 
-def nginx_conf(domain: str) -> str:
+def nginx_conf(domain: str, gateway_port: int) -> str:
     return textwrap.dedent(f"""\
         server {{
             listen 80;
@@ -175,7 +202,7 @@ def nginx_conf(domain: str) -> str:
 
             # API -> gateway
             location /api/ {{
-                proxy_pass http://127.0.0.1:8000/;
+                proxy_pass http://127.0.0.1:{gateway_port}/;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -184,7 +211,7 @@ def nginx_conf(domain: str) -> str:
 
             # Concierge SSE stream (no buffering)
             location /api/ai/concierge {{
-                proxy_pass http://127.0.0.1:8000/ai/concierge;
+                proxy_pass http://127.0.0.1:{gateway_port}/ai/concierge;
                 proxy_set_header Connection '';
                 proxy_http_version 1.1;
                 proxy_buffering off;
@@ -195,6 +222,109 @@ def nginx_conf(domain: str) -> str:
     """)
 
 
+def caddy_conf(domain: str, gateway_port: int) -> str:
+    return textwrap.dedent(f"""\
+        {{
+            email admin@{domain}
+        }}
+
+        {domain} {{
+            root * {APP_DIR}/frontend/dist
+            encode zstd gzip
+
+            header {{
+                X-Frame-Options "SAMEORIGIN"
+                X-Content-Type-Options "nosniff"
+                Referrer-Policy "strict-origin-when-cross-origin"
+            }}
+
+            handle_path /api/* {{
+                reverse_proxy 127.0.0.1:{gateway_port} {{
+                    flush_interval -1
+                    header_up X-Real-IP {{remote_host}}
+                    header_up X-Forwarded-For {{remote_host}}
+                    header_up X-Forwarded-Proto {{scheme}}
+                }}
+            }}
+
+            try_files {{path}} /index.html
+            file_server
+        }}
+    """)
+
+
+def _read_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw in path.read_text().splitlines():
+        if not raw or raw.strip().startswith("#") or "=" not in raw:
+            continue
+        k, v = raw.split("=", 1)
+        values[k.strip()] = v.strip()
+    return values
+
+
+def upsert_env(path: Path, key: str, value: str) -> None:
+    lines = path.read_text().splitlines() if path.exists() else []
+    replaced = False
+    out: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith(f"{key}="):
+            out.append(f"{key}={value}")
+            replaced = True
+        else:
+            out.append(raw)
+    if not replaced:
+        out.append(f"{key}={value}")
+    write_file_as_user(path, "\n".join(out).rstrip() + "\n", APP_USER)
+
+
+def robots_txt(domain: str) -> str:
+    return textwrap.dedent(f"""\
+        User-agent: *
+        Allow: /
+
+        Disallow: /#/admin-login
+        Disallow: /#/dashboard
+
+        Sitemap: https://{domain}/sitemap.xml
+    """)
+
+
+def sitemap_xml(domain: str) -> str:
+    urls = [
+        "/",
+        "/#/browse",
+        "/#/sell",
+        "/#/pricing",
+        "/#/terms",
+        "/#/privacy",
+        "/#/disclaimer",
+    ]
+    body = "\n".join(
+        f"  <url>\n    <loc>https://{domain}{u}</loc>\n  </url>" for u in urls
+    )
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{body}\n</urlset>\n'
+
+
+def write_public_assets(domain: str) -> None:
+    public_dir = APP_DIR / "frontend" / "public"
+    dist_dir = APP_DIR / "frontend" / "dist"
+    if not DRY:
+        sudo(["-u", APP_USER, "mkdir", "-p", str(public_dir)], check=False)
+    write_file_as_user(public_dir / "robots.txt", robots_txt(domain), APP_USER)
+    write_file_as_user(public_dir / "sitemap.xml", sitemap_xml(domain), APP_USER)
+    write_file_as_user(public_dir / "ads.txt", "google.com, pub-9972634875622184, DIRECT, f08c47fec0942fa0\n", APP_USER)
+    if dist_dir.exists() or DRY:
+        if not DRY:
+            sudo(["-u", APP_USER, "mkdir", "-p", str(dist_dir)], check=False)
+        write_file_as_user(dist_dir / "robots.txt", robots_txt(domain), APP_USER)
+        write_file_as_user(dist_dir / "sitemap.xml", sitemap_xml(domain), APP_USER)
+        write_file_as_user(dist_dir / "ads.txt", "google.com, pub-9972634875622184, DIRECT, f08c47fec0942fa0\n", APP_USER)
+
+
 # ----- deploy steps -----------------------------------------------------------
 def install_system_packages() -> None:
     info("Installing system packages (idempotent)...")
@@ -202,7 +332,7 @@ def install_system_packages() -> None:
     pkgs = [
         "python3.11", "python3.11-venv", "python3-pip",
         "postgresql", "postgresql-contrib", "postgresql-15-pgvector",
-        "redis-server", "nginx", "certbot", "python3-certbot-nginx",
+        "redis-server", "caddy", "nginx", "certbot", "python3-certbot-nginx",
         "git", "curl", "build-essential",
     ]
     sudo(["apt-get", "install", "-y", *pkgs])
@@ -212,6 +342,10 @@ def install_system_packages() -> None:
     sudo(["apt-get", "install", "-y", "nodejs"])
     sudo(["systemctl", "enable", "--now", "postgresql"])
     sudo(["systemctl", "enable", "--now", "redis-server"])
+    if PROXY == "caddy":
+        sudo(["systemctl", "enable", "--now", "caddy"])
+    else:
+        sudo(["systemctl", "enable", "--now", "nginx"])
     ok("System packages ready.")
 
 
@@ -219,13 +353,23 @@ def create_app_user_and_dirs() -> None:
     info(f"Ensuring service user '{APP_USER}' and {APP_DIR}...")
     run(["sudo", "id", "-u", APP_USER], check=False)
     sudo(["useradd", "--system", "--create-home", "--shell", "/usr/sbin/nologin",
-          APP_USER])  # harmless if it already exists (dry/idempotent intent)
+          APP_USER], check=False)
     sudo(["mkdir", "-p", str(APP_DIR)])
     # sync current checkout into APP_DIR (rsync keeps it simple, no Docker)
     run(["sudo", "rsync", "-a", "--delete",
          "--exclude", ".venv", "--exclude", "node_modules",
          "--exclude", ".git", f"{Path.cwd()}/", f"{APP_DIR}/"], check=False)
     sudo(["chown", "-R", f"{APP_USER}:{APP_USER}", str(APP_DIR)])
+
+
+def ensure_runtime_env(domain: str) -> None:
+    env_path = APP_DIR / ".env"
+    if not env_path.exists() and (APP_DIR / ".env.example").exists():
+        run(["sudo", "cp", str(APP_DIR / ".env.example"), str(env_path)])
+        sudo(["chown", f"{APP_USER}:{APP_USER}", str(env_path)])
+    upsert_env(env_path, "ENV", "prod")
+    upsert_env(env_path, "FRONTEND_ORIGIN", f"https://{domain}")
+    upsert_env(env_path, "PUBLIC_DOMAIN", domain)
 
 
 def setup_backend(seed: bool) -> None:
@@ -250,12 +394,14 @@ def setup_backend(seed: bool) -> None:
     ok("Backend ready.")
 
 
-def build_frontend() -> None:
+def build_frontend(domain: str) -> None:
     info("Building frontend (vite build -> static)...")
     fe = APP_DIR / "frontend"
+    write_public_assets(domain)
     if (fe / "package.json").exists() or DRY:
         run(["sudo", "-u", APP_USER, "bash", "-lc",
              f"cd {fe} && npm ci && npm run build"], check=False)
+        write_public_assets(domain)
         ok("Frontend built to frontend/dist.")
     else:
         warn("frontend/ not present — build it from frontend.md before deploy.")
@@ -276,10 +422,10 @@ def install_systemd_units(workers: int) -> None:
     ok("systemd units installed & started.")
 
 
-def configure_nginx(domain: str) -> None:
+def configure_nginx(domain: str, gateway_port: int) -> None:
     info("Configuring nginx + TLS...")
     write_file(Path(f"/etc/nginx/sites-available/vitrine"),
-               nginx_conf(domain), root=True)
+               nginx_conf(domain, gateway_port), root=True)
     sudo(["ln", "-sf", "/etc/nginx/sites-available/vitrine",
           "/etc/nginx/sites-enabled/vitrine"])
     sudo(["rm", "-f", "/etc/nginx/sites-enabled/default"])
@@ -291,6 +437,20 @@ def configure_nginx(domain: str) -> None:
     ok("nginx + TLS configured.")
 
 
+def configure_caddy(domain: str, gateway_port: int) -> None:
+    info("Configuring Caddy + TLS...")
+    write_file(Path("/etc/caddy/Caddyfile"), caddy_conf(domain, gateway_port), root=True)
+    sudo(["systemctl", "reload", "caddy"], check=False)
+    ok("Caddy configured.")
+
+
+def configure_proxy(domain: str, gateway_port: int) -> None:
+    if PROXY == "caddy":
+        configure_caddy(domain, gateway_port)
+    else:
+        configure_nginx(domain, gateway_port)
+
+
 # ----- sub-commands -----------------------------------------------------------
 def cmd_deploy(args: argparse.Namespace) -> int:
     require_linux()
@@ -299,10 +459,11 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     info(f"Deploying Vitrine to {args.domain} (workers={args.workers})")
     install_system_packages()
     create_app_user_and_dirs()
+    ensure_runtime_env(args.domain)
     setup_backend(seed=args.seed)
-    build_frontend()
+    build_frontend(args.domain)
     install_systemd_units(args.workers)
-    configure_nginx(args.domain)
+    configure_proxy(args.domain, SERVICES["gateway"][1])
     cmd_status(args)
     ok(f"Deployed. Visit https://{args.domain}")
     return 0
@@ -311,12 +472,21 @@ def cmd_deploy(args: argparse.Namespace) -> int:
 def cmd_update(args: argparse.Namespace) -> int:
     require_linux()
     info("Updating release...")
+    env_vars = _read_env(APP_DIR / ".env")
+    domain = args.domain or env_vars.get("PUBLIC_DOMAIN") or env_vars.get("FRONTEND_ORIGIN", "").replace("https://", "")
+    if not domain:
+        warn("No domain found in .env (PUBLIC_DOMAIN/FRONTEND_ORIGIN). Using localhost for SEO assets.")
+        domain = "localhost"
     run(["sudo", "-u", APP_USER, "bash", "-lc", f"cd {APP_DIR} && git pull"], check=False)
+    ensure_runtime_env(domain)
     setup_backend(seed=False)   # installs deps + migrates (idempotent)
-    build_frontend()
+    build_frontend(domain)
     for name in SERVICES:
         sudo(["systemctl", "restart", f"vitrine-{name}"])
-    sudo(["systemctl", "reload", "nginx"])
+    if PROXY == "caddy":
+        configure_caddy(domain, SERVICES["gateway"][1])
+    else:
+        configure_nginx(domain, SERVICES["gateway"][1])
     ok("Updated & restarted.")
     return 0
 
@@ -346,19 +516,24 @@ def cmd_rollback(args: argparse.Namespace) -> int:
 def cmd_teardown(args: argparse.Namespace) -> int:
     for name in SERVICES:
         sudo(["systemctl", "disable", "--now", f"vitrine-{name}"])
-    sudo(["rm", "-f", "/etc/nginx/sites-enabled/vitrine"])
-    sudo(["systemctl", "reload", "nginx"])
+    if PROXY == "caddy":
+        sudo(["systemctl", "restart", "caddy"], check=False)
+    else:
+        sudo(["rm", "-f", "/etc/nginx/sites-enabled/vitrine"])
+        sudo(["systemctl", "reload", "nginx"], check=False)
     ok("Vitrine units stopped & disabled.")
     return 0
 
 
 # ----- main -------------------------------------------------------------------
 def main() -> int:
-    global DRY, APP_DIR, APP_USER
+    global DRY, APP_DIR, APP_USER, SERVICES, PROXY
     ap = argparse.ArgumentParser(description="Vitrine cloud VM deploy (native, no Docker)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--app-dir", default=str(APP_DIR))
     ap.add_argument("--user", default=APP_USER)
+    ap.add_argument("--proxy", choices=["caddy", "nginx"], default="caddy")
+    ap.add_argument("--gateway-port", type=int, default=DEFAULT_GATEWAY_PORT)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("deploy")
@@ -367,7 +542,9 @@ def main() -> int:
     p.add_argument("--workers", type=int, default=2)
     p.set_defaults(func=cmd_deploy)
 
-    sub.add_parser("update").set_defaults(func=cmd_update)
+    u = sub.add_parser("update")
+    u.add_argument("--domain")
+    u.set_defaults(func=cmd_update)
     sub.add_parser("status").set_defaults(func=cmd_status)
     lp = sub.add_parser("logs"); lp.add_argument("service", nargs="?"); lp.set_defaults(func=cmd_logs)
     sub.add_parser("rollback").set_defaults(func=cmd_rollback)
@@ -377,6 +554,8 @@ def main() -> int:
     DRY = args.dry_run
     APP_DIR = Path(args.app_dir)
     APP_USER = args.user
+    PROXY = args.proxy
+    SERVICES = build_services(args.gateway_port)
     if DRY:
         warn("DRY-RUN: no changes will be made.\n")
     return args.func(args)

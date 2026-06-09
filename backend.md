@@ -370,17 +370,17 @@ python run.py --no-frontend
 
 ## 14. Deployment (`cloudrun.py`)
 
-Native build on a single cloud VM (Ubuntu), **no Docker**, **systemd + nginx**.
+Native build on a single cloud VM (Ubuntu), **no Docker**, **systemd + Caddy/nginx**.
 
 `cloudrun.py deploy --domain vitrine.example.com` performs:
 
-1. **System packages** (idempotent, `apt`): `python3.11`, `nodejs`, `postgresql`, `postgresql-contrib` (+ `pgvector`), `redis-server`, `nginx`, `certbot`.
+1. **System packages** (idempotent, `apt`): `python3.11`, `nodejs`, `postgresql`, `postgresql-contrib` (+ `pgvector`), `redis-server`, `caddy`, `nginx`, `certbot`.
 2. **App user & dirs:** `vitrine` system user, `/opt/vitrine`, pull/copy code.
 3. **Backend:** create `.venv`, install deps; create DB/role; enable `pgvector`; `alembic upgrade head`; optional seed.
 4. **Frontend:** `npm ci && npm run build` → static assets to `/opt/vitrine/frontend/dist`.
 5. **systemd units** (one per service + workers), e.g. `vitrine-gateway.service`, `vitrine-catalog.service`, `vitrine-ai.service`, `vitrine-ai-worker@.service` (templated for N workers). Backend served by **gunicorn + uvicorn workers**; `Restart=always`; `EnvironmentFile=/opt/vitrine/.env` (`0600`).
-6. **nginx:** reverse-proxy `/api/*` → gateway `:8000`; SSE passthrough for `/api/ai/concierge`; serve the built frontend as static; gzip; security headers + CSP.
-7. **TLS:** `certbot --nginx -d <domain>`.
+6. **Proxy + TLS:** Caddy by default (or nginx with certbot). Reverse-proxy `/api/*` → gateway and serve frontend static build.
+7. **SEO assets:** `robots.txt`, `sitemap.xml`, and `ads.txt` are generated with the deployment domain.
 8. **Enable + start** all units; run **health checks**; print status.
 
 ```bash
@@ -391,7 +391,7 @@ python cloudrun.py logs <service>     # journalctl -u vitrine-<service> -f
 python cloudrun.py rollback           # restart on previous release dir
 ```
 
-**Topology on the VM:** nginx (443) → gateway (8000) → internal services (8001–8010, bound to `127.0.0.1`); Postgres/Redis local sockets. Everything on one VM keeps cost low; services can later move to separate VMs unchanged (they're already network-addressable).
+**Topology on the VM:** Caddy/nginx (443) → gateway (`18000` by default) → internal services (`18001+`, bound to `127.0.0.1`); Postgres/Redis local sockets. Everything on one VM keeps cost low; services can later move to separate VMs unchanged (they're already network-addressable).
 
 > **Managed preview hosting (Phase 4):** the `hosting` service gains a deploy worker that, for paid listings, clones the seller's repo into `/opt/vitrine/hosted/<id>`, runs the detected build/run commands under a dedicated unprivileged user + its own systemd unit, and exposes it at `https://<slug>.preview.vitrine.app` via an nginx vhost — **billed by duration** (a timer unit tears it down at expiry). Same native, no-Docker pattern.
 
@@ -466,7 +466,8 @@ The frontend currently runs **100% on the in-memory Zustand store + mock data**
 
 1. **Add `frontend/.env`** (see `frontend/.env.example`):
    ```ini
-   VITE_API_BASE=http://localhost:8000      # gateway (monolith) in dev
+   VITE_API_BASE=/api                         # same-origin API path
+   VITE_PROXY_TARGET=http://localhost:8000   # Vite dev proxy target
    VITE_USE_MOCKS=false                       # true = keep current mock store
    ```
 2. **Add `frontend/src/app/lib/api.ts`** — a typed client (ready to paste below).

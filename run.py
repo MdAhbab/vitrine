@@ -334,7 +334,9 @@ def build_processes(
 
     if with_frontend and FRONTEND.exists() and (FRONTEND / "package.json").exists():
         env = os.environ.copy()
-        env["VITE_API_BASE"] = api_url
+        env["VITE_API_BASE"] = "/api"
+        env["VITE_PROXY_TARGET"] = api_url
+        env["VITE_USE_MOCKS"] = "false"
         procs.append(
             Proc(
                 "frontend",

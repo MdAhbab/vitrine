@@ -1,6 +1,6 @@
 // frontend/src/app/lib/api.ts — drop-in integration layer
-const BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
-export const USE_MOCKS = (import.meta.env.VITE_USE_MOCKS ?? 'true') === 'true';
+const BASE = import.meta.env.VITE_API_BASE ?? '/api';
+export const USE_MOCKS = (import.meta.env.VITE_USE_MOCKS ?? 'false') === 'true';
 
 const tok = {
   get access() { return localStorage.getItem('vitrine_access'); },

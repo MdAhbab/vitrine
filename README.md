@@ -360,7 +360,7 @@ Screenshots `[req]`, demo video (optional), GIFs, sample data.
 - **Primary store:** PostgreSQL; **pgvector** extension gives semantic search without a separate vector DB.
 - **Cache / queues / rate-limit / sessions:** Redis.
 - **Agents:** stateless workers in the AI Orchestration service, subscribing to events, calling OpenAI with typed tools.
-- **Local dev:** one process-manager spawns each service (uvicorn per service) + workers + Vite. **Cloud:** native systemd services behind nginx (see `cloudrun.py`).
+- **Local dev:** one process-manager spawns each service (uvicorn per service) + workers + Vite. **Cloud:** native systemd services behind Caddy/nginx (see `cloudrun.py`).
 
 ---
 
@@ -430,7 +430,7 @@ $10 + 1–2 days demands a **cheap-but-capable** model and **ruthless cost contr
 | Comms | Redis Streams event bus, REST (+ SSE for streaming chat) |
 | Auth | JWT + RBAC |
 | Payments | Mock provider → Stripe adapter |
-| Deploy | Native cloud VM: uvicorn/gunicorn + systemd + nginx (no Docker) |
+| Deploy | Native cloud VM: uvicorn/gunicorn + systemd + Caddy/nginx (no Docker) |
 
 ---
 
@@ -442,7 +442,7 @@ vitrine/
 ├── AGENTS.md              ← agent roster, tools, memory, workflows
 ├── backend.md             ← backend architecture, data model, deploy
 ├── run.py                 ← local dev orchestration (services + Vite; cloud dispatch)
-├── cloudrun.py            ← native cloud VM deploy (systemd + nginx)
+├── cloudrun.py            ← native cloud VM deploy (systemd + Caddy/nginx)
 ├── .env.example
 ├── backend/
 │   ├── gateway/           ├── services/{identity,catalog,search,
@@ -481,11 +481,11 @@ python run.py cloud       # dispatches to cloudrun.py
 python cloudrun.py deploy --domain vitrine.example.com
 ```
 `cloudrun.py`:
-1. installs system packages (Python/Node/Postgres/Redis/nginx) if missing,
+1. installs system packages (Python/Node/Postgres/Redis/Caddy/nginx) if missing,
 2. builds the frontend (`vite build`) to static assets,
 3. sets up the venv + migrations + seed,
 4. writes **systemd** unit files for each service + agent workers (gunicorn/uvicorn workers),
-5. configures **nginx** as reverse proxy + static host + TLS (certbot),
+5. configures **Caddy** (default) or **nginx** as reverse proxy + static host + TLS (certbot for nginx),
 6. starts/enables all units and runs health checks.
 
 Full flags and the deployment topology are documented in [backend.md](./backend.md#deployment).
