@@ -101,7 +101,10 @@ listings(id pk, seller_id fk users, name, slug uniq, tagline,
          category, subcategory, pricing_model, price_cents, currency,
          license, delivery_method, status enum[draft,enriching,review,
          live,flagged,paused,archived], demo_url, managed_hosting enum,
-         vitrine_score numeric, score_breakdown jsonb, created_at, updated_at)
+         vitrine_score numeric, score_breakdown jsonb, 
+         sdlc_notes text, problem_statement text, solution_methodology text, 
+         business_model_draft text, tech_stack_draft jsonb, discussion_board jsonb, 
+         created_at, updated_at)
 
 listing_fields(id pk, listing_id fk, section, key, value jsonb,
                source enum[ai,seller,heuristic], confidence numeric)
@@ -123,7 +126,8 @@ orders(id pk, buyer_id fk, listing_id fk, tier_id fk, amount_cents,
        kind enum[purchase,advance], status enum[pending,paid,delivered,
        refunded,disputed], provider, provider_ref, created_at)
 deliveries(id pk, order_id fk, artifact_url, license_key, delivered_at)
-payouts(id pk, seller_id fk, order_id fk, amount_cents, status)
+payouts(id pk, seller_id fk, order_id fk null, amount_cents, status enum[pending, processed, failed],
+        payout_method enum[bank, mobile_wallet], payout_details jsonb, requested_at, processed_at)
 
 subscriptions(id pk, seller_id fk users, tier enum[free, monthly_pro], price_cents,
               start_date, end_date, active bool, is_student bool default false, created_at)
@@ -256,8 +260,8 @@ POST   /users/verify-student              # student status upload
 
 POST   /listings                         # create draft
 POST   /listings/{id}/intake             # trigger Repo-Intake (repo_url | readme upload)
-PATCH  /listings/{id}                     # seller edits form fields
-POST   /listings/{id}/submit              # → verification
+PATCH  /listings/{id}                     # seller edits form fields (draft update)
+DELETE /listings/{id}                     # delete listing (CRUD)
 GET    /listings/{id}
 GET    /listings?category=&tags=&sort=vitrine_score&...
 
@@ -272,7 +276,10 @@ GET    /search?q=...                      # hybrid search
 POST   /checkout                          # create order (purchase|advance)
 POST   /webhooks/payments                 # provider webhook (signed)
 POST   /orders/{id}/deliver               # seller uploads full app
+GET    /orders/{id}                       # detailed order status (milestones, delivery)
 GET    /transactions/ledger               # transaction auditing (admin-only)
+GET    /payouts                           # list payout request history for seller
+POST   /payouts/request                   # request payout transfer
 
 POST   /subscriptions/subscribe           # subscribe to Pro Monthly Tier
 GET    /subscriptions/status              # check current subscription tier

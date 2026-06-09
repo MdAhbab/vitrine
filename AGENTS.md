@@ -37,6 +37,8 @@
    - If private or no repo: use `readme_text` / uploaded README/files only.
 2. **Deterministic extraction:** `detect_stack` parses manifests → languages, frameworks, libs, package manager, test frameworks, CI, deploy targets, build/run commands, env-var names. Fills as many Section 3–8 fields as possible **without the LLM**.
 3. **LLM enrichment (one call, tool-calling):** the model fills the *judgment* fields — problem statement, target users, feature highlights, architecture summary, category/subcategory/tags suggestions, long description draft — via `write_listing_fields`, each with a confidence.
+   - **Business Model / Purpose Draft**: The model drafts the business purpose of the software (commercial SaaS, non-profiting utility, open-source tool, or student project).
+   - **Tech Stack Draft**: The model compiles a draft of the primary frameworks, libraries, and languages.
 4. **Embed:** `embed_text` on (name + tagline + description + tags) → vector stored for search.
 5. Emit `listing.enriched` with the filled form + per-field confidence.
 
@@ -44,7 +46,7 @@
 
 **Memory:** long-term category/tag embeddings (for consistent taxonomy); short-term run scratch (the assembled repo context).
 
-**Guardrails:** never invents a demo URL or license it can't evidence; unverifiable fields get low confidence + `needs_seller_confirmation`. Caps repo fetch size; respects GitHub rate limits via cache.
+**Guardrails:** never invents a demo URL or license it can't evidence; unverifiable fields get low confidence + `needs_seller_confirmation`. Caps repo fetch size; respects GitHub rate limits via cache. All output business models and tech stacks are tagged as editable drafts for the seller.
 
 **Output schema (abridged):**
 ```json
@@ -144,24 +146,25 @@
 
 ## 5.1. Buyer Representative Agent
 
-**Role:** Represent the buyer to negotiate pricing, terms, custom milestones, or bundle deals with the seller/developer.
+**Role:** Represent the buyer to negotiate pricing, terms, custom milestones, or bundle deals with the seller/developer, fully context-aware of the user's order details and transaction history.
 
 **Triggers:** Buyer activates negotiation on a listing.
 
 **Workflow:**
-1. **Load Context:** Retrieve listing details, buyer-defined constraints (target budget, maximum budget, timeline requirements), and previous messages in the conversation.
-2. **Formulate Negotiation Strategy:** Evaluate the listing's market comps and history to determine a reasonable offer and talking points.
-3. **Draft Message:** Call `draft_negotiation_message` to generate the next response in the chat thread.
+1. **Load Context:** Retrieve listing details, buyer-defined constraints (target budget, maximum budget, timeline requirements), previous messages, and **active/past order details and purchase history** for this specific buyer.
+2. **Formulate Negotiation Strategy:** Evaluate the listing's market comps, seller's tier/rating, and buyer's order history to determine a reasonable offer and contextual arguments (e.g., volume discount for returning buyers).
+3. **Draft Message:** Call `draft_negotiation_message` with order details and historical context to generate the next response in the chat thread.
 4. **Respond to Seller:** Post the message to the chat channel. The seller can reply directly, triggering the agent to evaluate the response and draft a counter-offer.
 
 **Tools:** `get_listing`, `draft_negotiation_message`, `market_comps`.
 
-**Memory:** Buyer preferences, active negotiation parameters (budget, target price), and chat history.
+**Memory:** Buyer preferences, active negotiation parameters (budget, target price), chat history, and past order ledger summaries.
 
 **Guardrails:**
 - Buyers must be logged in to spawn representatives.
 - Enforce a strict limit of **maximum 2 active representatives** per buyer at any time.
 - The agent cannot exceed the buyer's declared maximum budget.
+- The agent must tailor arguments based on verified order logs and never fabricate past purchases.
 - Cleanly disclose to the seller that they are interacting with an AI agent representative of the buyer.
 
 ---
@@ -218,7 +221,7 @@
 | `write_listing_fields(id, fields)` | deterministic | persist form fields |
 | `submit_verdict(id, verdict)` | deterministic | persist verification verdict |
 | `flag_listing(id, reason)` | deterministic | escalate to admin |
-| `draft_negotiation_message(buyer_id, seller_id, listing_id, context)` | LLM | Drafts next negotiation message based on bounds and history |
+| `draft_negotiation_message(buyer_id, seller_id, listing_id, context, order_details?)` | LLM | Drafts next negotiation message based on bounds, chat history, and buyer's order context |
 | `estimate_feature_cost(listing_id, feature_description)` | LLM-assisted | Evaluates feature request against codebase specs and estimates pricing |
 
 ---

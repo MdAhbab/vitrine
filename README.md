@@ -87,21 +87,26 @@ Vitrine supports high-value listings (up to **$15,000+** for complex software/co
 
 ### A) Developer / Student (Seller)
 1. Sign up → choose **Developer** role. Option to verify student status to claim the **25% discount** or subscribe to the Monthly Pro Tier.
-2. **New Listing** → paste GitHub URL *or* upload README → **Repo-Intake Agent** crawls and **auto-fills the technical form sheet** (enforced limit of 2 active posts if on Free tier).
-3. Review/edit the auto-filled fields; add the **Vercel preview URL**; set price/tiers (with **Pricing & Pitch Agent** suggestions). Support for high-value posts (up to $15k+).
-4. Submit → **Verification Agent** checks quality/plausibility/red-flags → approve / request-changes / flag.
-5. Listing goes live; **Curation & Ranking Agent** computes its **Vitrine Score**.
-6. When buyers initiate negotiations via an AI representative or submit custom feature requests, chat directly with the buyer/representative from the seller's inbox and approve estimated add-on pricing.
-7. On purchase/advance → **notified** → deliver full build to buyer.
+2. **Maker's Window (Inventory CRUD)**: Access a dedicated dashboard displaying all current listings. Developers can fully create, read, update, or delete project details. Tapping on a listing card opens its full edit view.
+3. **AI Draft Review**: Upon repo import, view and edit AI-drafted sections:
+   - **Business Model / Purpose**: An AI draft detailing the purpose (e.g., Commercial SaaS, open-source, non-profiting utility, or student showcase).
+   - **Tech Stack Draft**: An automatically compiled list of frameworks, languages, and tools which the developer can adjust.
+4. Review/edit the auto-filled fields; add the **Vercel preview URL**; set price/tiers (with **Pricing & Pitch Agent** suggestions). Support for high-value posts (up to $15k+).
+5. Submit → **Verification Agent** checks quality/plausibility/red-flags → approve / request-changes / flag.
+6. **Payout Page**: Manage earned revenues, view commissions charged on the Free tier, and trigger withdrawals.
+7. Respond to custom feature requests or bargain sessions initiated by buyers' representatives from the chat inbox.
+8. On purchase/advance → **notified** → deliver full build to buyer.
 
 ### B) Buyer
 1. Browse the gallery (curated sections, filters, sorts) or ask the **Buyer Concierge**: *"React dashboard with Stripe, under $40, live demo."*
 2. Open a listing → **run the live preview** in a sandboxed device frame.
-3. Read AI-summarized spec + verified badges + reviews + Vitrine Score.
+3. Read AI-summarized spec + verified badges + reviews + Vitrine Score, plus the product's **SDLC phase, problem statement, solution methodology, and discussions board**.
 4. **Negotiate & Talk**: Click the "Ask AI to Bargain" button to spawn an **AI Representative** to talk/negotiate with the seller/developer on your behalf. 
    - *Constraint*: Only logged-in buyers can have **up to 2 active representatives** at a time.
-5. **Request Features**: Submit a request for additional customizations. The Feature Cost Estimator agent automatically calculates recommended charges for the seller to approve.
-6. Buy / pay advance (supports high-value transactions up to $15k+ via payment gateways) → receive delivery → review the product.
+   - *Context-Awareness*: The AI negotiator reads the buyer's order details and past transaction context to negotiate custom terms.
+5. **Purchased Products Library**: View all bought items in a library workspace, tap cards to open full product specifications/live previews, and access a detailed **Order Details Page** to monitor delivery milestones.
+6. **Request Features**: Submit a request for additional customizations. The Feature Cost Estimator agent automatically calculates recommended charges for the seller to approve.
+7. Buy / pay advance (supports high-value transactions up to $15k+ via payment gateways) → receive delivery → review the product.
 
 ### C) Admin / Curator
 1. Log in via the dedicated **Admin Auth Page** (`/admin/login`).
@@ -220,16 +225,20 @@ This is the **canonical technical form** every product is described by. The **Re
 | Delivery method | enum `[req]` | Source download, License key, Hosted handoff, Custom build |
 | Short description | text `[ai]` | ≤ 200 chars |
 | Long description | `[md][ai]` | AI draft, seller edits |
+| AI Business Model Purpose | text `[ai*]` | AI-drafted purpose: e.g. Non-profiting utility, Commercial SaaS, Open-source tool, Student project (Seller can modify) |
 
 ### Section 1 — Planning & Product
 | Field | Type | Notes |
 |---|---|---|
-| Problem it solves | `[md][ai]` | |
+| Problem statement | `[md][ai]` | Problem statement addressed by the software |
+| Solution & Methodology | `[md][ai*]` | Core methodology and architectural solution to the problem |
+| SDLC Stage & Notes | `[md][ai*]` | SDLC methodology details (Planning, Design, Development, Testing, Deployment) |
 | Target users | multi `[ai*]` | |
 | Key features | list `[ai]` | bullet highlights |
 | Use cases | list `[ai*]` | |
 | Project maturity | enum `[ai*]` | Prototype, MVP, Beta, Production, Mature |
 | Roadmap / known limitations | `[md][ai*]` | |
+| Discussion board | structured `[req]` | Public Q&A and discussions between buyers and seller |
 
 ### Section 2 — Design & UX
 | Field | Type | Notes |
@@ -241,7 +250,9 @@ This is the **canonical technical form** every product is described by. The **Re
 | Design assets | files `[ai*]` | Figma link, screenshots |
 | Demo screenshots | files `[req]` | used for **UI vision score** |
 
-### Section 3 — Development
+### Section 3 — Development (AI-Generated Tech Stack Draft)
+*Note: All fields in this section are drafted by the Repo-Intake Agent and can be viewed, changed, and edited by the seller.*
+
 | Field | Type | Notes |
 |---|---|---|
 | Primary language(s) | multi `[req][ai]` | detected from repo |

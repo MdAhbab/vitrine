@@ -80,24 +80,28 @@ The defining interaction is **the live preview**. Every product card has a **"Ru
 3. **Concierge (`/concierge` or a slide-over)** — a chat panel: user types natural language ("React dashboard with Stripe, under $40, live demo"), streamed assistant responses (SSE) with **inline product result cards** and reasons + a "compare" affordance. Feels like talking to a knowledgeable shop curator, not a chatbot widget.
 4. **Product page (`/p/:slug`)** —
    - Hero: name, tagline, seller, price/tiers (supports high-value display up to $15k+), **Vitrine Score ring**, verified badge, **live preview device frame** (the star).
+   - **SDLC & Methodology Panel**: Visual timeline of the software's SDLC phase (Planning, Design, Development, Testing, Deployment) + problem statement, solution details, and implementation methodology.
+   - **Discussions Board**: Collaborative Q&A section where logged-in users post questions and developers answer publicly.
    - **Bargaining Button & AI Rep Control**: A sticky/conspicuous "Ask AI to Bargain" button. If clicked, spawns a sidebar allowing the logged-in buyer to set constraints (target/max budget) and kick off an AI negotiator representative (max 2 active reps per buyer at any time).
    - **Feature Request Panel**: A button allowing the buyer to describe additional customizations. Shows the AI Feature Cost Estimator's recommended charge before submission.
    - **The Spec Sheet:** the technical form sheet rendered as a beautiful, scannable, mono-accented spec table grouped by section (Planning, Design, Development, Architecture, Data, Testing, Security, Deployment). AI-filled fields show a subtle "auto-filled" marker; confidence-flagged fields look intentional, not broken.
    - Screenshots gallery, long description (markdown), reviews + rating distribution, "similar products" rail, and a sticky **Buy / Pay advance** panel.
 5. **Sell — New Listing wizard (`/sell/new`)** — the agentic flow:
    - Step 1: **Import** — paste a GitHub URL *or* drag-drop/upload a README/files. (If the developer has reached the 2 active listings limit on the Free tier, prompts for a Pro monthly subscription).
-   - Step 2: **Review the auto-filled spec** — the full form sheet pre-filled; AI-filled fields marked; low-confidence fields gently highlighted for confirmation; inline editing.
+   - Step 2: **Review the auto-filled spec** — the full form sheet pre-filled; AI-filled fields marked; low-confidence fields gently highlighted for confirmation; inline editing of AI-drafted business model purpose and tech stack.
    - Step 3: **Preview & media** — add the `*.vercel.app` demo URL (with a live health check), screenshots.
    - Step 4: **Price & pitch** — call the **Pricing & Pitch Agent**: suggested tiers + drafted copy the seller accepts/edits.
    - Step 5: **Submit** → verification status view.
 6. **Seller dashboard (`/dashboard/seller`)** —
-   - **Listings inventory**: Grid/table with status + Vitrine Score (limit of 2 active listings enforced for Free tier).
+   - **Maker's Window (Inventory CRUD)**: A dedicated listing manager. Displays all active/draft posts. Tapping a listing card opens the full edit portal where the seller can edit fields (including AI tech stack and business model drafts) or delete the listing entirely.
    - **Subscription & Tiers**: Upgrade form, billing tier status, and a verification portal for student status (to claim the 25% discount).
    - **Feature Request Center**: Review buyer customization feature requests, modify quotes, and approve development scopes.
+   - **Payouts Page**: Dedicated wallet/account layout listing historical earnings, platform commission rates, banking transfer settings, and withdrawal requests.
    - **Chat Inbox**: Interactive messaging pane containing both direct buyer threads and negotiations with buyers' AI representatives (agent identifier clearly visible).
-   - **Analytics & Payouts**: Views/launches/conversion charts, payouts ledger, commissions collected by the platform.
+   - **Analytics**: Views/launches/conversion charts.
 7. **Buyer dashboard (`/dashboard/buyer`)** — 
-   - **Orders & Library**: Purchases, advance-payment milestone statuses, delivered artifacts, license keys, and reviews editor.
+   - **Purchased Products Library**: Grid showing all successfully purchased software packages. Users can click any product card to open the live sandboxed preview frame, view specs, or download delivery files.
+   - **Order Details Page (`/orders/:id`)**: Detailed invoice and delivery status view tracking milestones, developer handoff notes, signed download links/keys, and advance/milestone payment histories.
    - **AI Representative Control**: View active AI negotiators (shows active slots used: max 2 active reps indicator), adjust bargaining target/max budget constraints, and view live chat logs of the agent negotiating with the developer.
    - **Feature Customizations**: View status of requested additional features, pricing quotes from developers, and checkout triggers to pay the charges.
    - **Direct Messages**: Inbox for chatting with developers directly.
@@ -122,6 +126,11 @@ The defining interaction is **the live preview**. Every product card has a **"Ru
 - `PreviewFrame` — device-framed sandboxed iframe (browser/phone toggle, reload, open-in-new, live pulse, health dot, graceful "demo unavailable" state).
 - `VitrineScoreRing` — circular gauge (gold), tooltip showing the per-signal breakdown (completeness, reviews, UI, demo health, recency, engagement).
 - `SpecSheet` — sectioned technical table with `source`/confidence markers and mono labels.
+- `SDLCViewer` — Visual vertical or horizontal timeline detailing planning, design, dev, test, and deploy status with description logs.
+- `DiscussionBoard` — Threaded message board for buyer-developer public discussions, with markdown support and developer verified badge indicators.
+- `PayoutsManager` — Earnings dashboard component showing balance ledger, payout methods (bank/mobile wallet forms), transfer history table, and input fields for withdrawal requests.
+- `OrderDetailsCard` — Rich invoice component displaying milestone progress, secure link handlers, and reviews triggers.
+- `ListingEditorForm` — Multi-tab form for CRUD operations on listings (identity, specs, screenshots, pricing, and AI draft overrides).
 - `FacetRail`, `SortMenu`, `SearchBar`, `ConciergePanel` (streaming chat + inline result cards).
 - `Wizard` + `FormSheetEditor` (renders fields from the shared `FORM_SCHEMA`).
 - `TierTable`, `BuyPanel` (purchase vs. pay-advance milestone triggers).
@@ -129,7 +138,7 @@ The defining interaction is **the live preview**. Every product card has a **"Ru
 - `FeatureRequestForm` — Modal/panel to describe desired features, integrating a loading skeleton for the AI cost estimate, showing recommended charges, and approval checkboxes.
 - `SubscriptionUpgradeSelector` — Premium UI layout showing Free vs. Monthly Pro cards, a student discount toggle (showing 25% discount price math), and secure gateway checkout.
 - `RepInbox` — Combined messaging UI displaying user chat threads and active AI rep vs. Seller negotiation channels.
-- `Badge` (Verified / Live demo / Best UI / New / Student / Pro), `Skeleton`, `Toast`, `Modal`, `Tabs`, `Tooltip`, `EmptyState`.
+- `Badge` (Verified / Live demo / Best UI / New / Student / Pro / Free / Non-Profit / Draft), `Skeleton`, `Toast`, `Modal`, `Tabs`, `Tooltip`, `EmptyState`.
 
 ## 5. Data layer & API contract
 Create `src/api/` with a typed client and a **mock implementation** toggled by `VITE_USE_MOCKS`. Match [backend.md §11](./backend.md#11-api-surface):
