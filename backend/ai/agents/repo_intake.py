@@ -11,13 +11,34 @@ SYSTEM = system_prompt_for("Repo-Intake Agent",
 
 async def run(listing_id: str, repo_url: str | None = None,
               readme_text: str | None = None) -> dict:
-    # TODO Phase 2: heuristic manifest parsing first, then ONE LLM call to fill
-    # judgment fields via the write_listing_fields tool; embed for search; emit
-    # listing.enriched. Scaffold returns the target field set + a draft note.
-    src = repo_url or "(uploaded README)"
-    result = await run_agent("repo_intake", SYSTEM,
-                             f"Summarize and draft listing fields for: {src}\n\n{readme_text or ''}",
-                             listing_id=listing_id, trigger="listing.created")
+    user_msg = f"Listing ID: {listing_id}\n"
+    if repo_url:
+        user_msg += f"Repository URL: {repo_url}\n"
+    if readme_text:
+        user_msg += f"Readme Text:\n{readme_text}\n"
+        
+    result = await run_agent(
+        "repo_intake", SYSTEM, user_msg,
+        listing_id=listing_id, trigger="listing.created",
+        tools=["fetch_repo_tree", "fetch_file", "read_readme", "detect_stack", "write_listing_fields"]
+    )
+    
+    from backend.shared.db import SessionLocal
+    from backend.shared.models import Listing
+    from backend.ai.vectorstore import vector_store
+    
+    async with SessionLocal() as db:
+        listing = await db.get(Listing, listing_id)
+        if listing:
+            text_to_embed = f"{listing.name} {listing.tagline} {listing.description}"
+            from backend.ai.tools import embed_text
+            try:
+                emb_res = await embed_text(text_to_embed)
+                if "embedding" in emb_res:
+                    await vector_store.upsert(db, listing_id, emb_res["embedding"])
+            except Exception:
+                pass
+                
     return {
         "listing_id": listing_id,
         "fillable_fields": ai_fillable_keys(),

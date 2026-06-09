@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { PRODUCTS, type Product } from './mockData';
+import { api, USE_MOCKS } from './api';
 
 export type Role = 'buyer' | 'seller' | 'admin';
 export type User = {
@@ -126,18 +127,21 @@ type State = {
   signIn: (u: User) => void;
   signOut: () => void;
   startThread: (input: Omit<Thread, 'id' | 'createdAt' | 'status' | 'unreadFor'>) => string;
-  sendMessage: (threadId: string, body: string, by: { id: string; name: string; isAgent?: boolean }) => void;
+  sendMessage: (threadId: string, body: string, by: { id: string; name: string; isAgent?: boolean }) => Promise<void>;
   agentReply: (threadId: string) => Promise<void>;
   recordTransaction: (t: Omit<Transaction, 'id' | 'ts'>) => void;
-  setUserPlan: (p: SellerPlan) => void;
-  toggleStudent: () => void;
-  upsertListing: (l: Listing) => void;
-  deleteListing: (id: string) => void;
+  setUserPlan: (p: SellerPlan) => Promise<void>;
+  toggleStudent: () => Promise<void>;
+  upsertListing: (l: Listing) => Promise<void>;
+  deleteListing: (id: string) => Promise<void>;
   adminConfig: AdminConfig;
-  updateAdminConfig: (patch: Partial<AdminConfig>) => void;
-  addApiKey: (k: Omit<AdminApiKey, 'id' | 'createdAt'>) => void;
-  toggleApiKey: (id: string) => void;
-  removeApiKey: (id: string) => void;
+  updateAdminConfig: (patch: Partial<AdminConfig>) => Promise<void>;
+  addApiKey: (k: Omit<AdminApiKey, 'id' | 'createdAt'>) => Promise<void>;
+  toggleApiKey: (id: string) => Promise<void>;
+  removeApiKey: (id: string) => Promise<void>;
+  loadSession: () => Promise<void>;
+  loadData: () => Promise<void>;
+  loadMessages: (threadId: string) => Promise<void>;
 };
 
 const SELLER_USERS: Record<string, { id: string; name: string }> = {};
@@ -181,8 +185,14 @@ export const useStore = create<State>((set, get) => ({
   listings: PRODUCTS.map((p, i) => ({ ...p, ownerId: SELLER_USERS[p.seller.name].id, status: 'live' as const })),
   activeReps: [],
 
-  signIn: (u) => set({ user: u }),
-  signOut: () => set({ user: null }),
+  signIn: (u) => {
+    set({ user: u });
+    get().loadData().catch(console.error);
+  },
+  signOut: () => {
+    if (!USE_MOCKS) api.clearTokens();
+    set({ user: null, threads: [], messages: [], transactions: [] });
+  },
 
   startThread: (input) => {
     const id = `t_${Math.random().toString(36).slice(2, 9)}`;
@@ -194,12 +204,21 @@ export const useStore = create<State>((set, get) => ({
     return id;
   },
 
-  sendMessage: (threadId, body, by) => {
-    const msg: Message = { id: `m_${Math.random().toString(36).slice(2, 9)}`, threadId, authorId: by.id, authorName: by.name, isAgent: by.isAgent, body, ts: Date.now() };
-    set((s) => ({
-      messages: [...s.messages, msg],
-      threads: s.threads.map((t) => t.id === threadId ? { ...t, unreadFor: by.isAgent || by.id !== t.sellerId ? ['seller'] : ['buyer'] } : t),
-    }));
+  sendMessage: async (threadId, body, by) => {
+    if (USE_MOCKS) {
+      const msg: Message = { id: `m_${Math.random().toString(36).slice(2, 9)}`, threadId, authorId: by.id, authorName: by.name, isAgent: by.isAgent, body, ts: Date.now() };
+      set((s) => ({
+        messages: [...s.messages, msg],
+        threads: s.threads.map((t) => t.id === threadId ? { ...t, unreadFor: by.isAgent || by.id !== t.sellerId ? ['seller'] : ['buyer'] } : t),
+      }));
+      return;
+    }
+    try {
+      await api.send(threadId, body, by.isAgent);
+      await get().loadMessages(threadId);
+    } catch (e) {
+      console.error(e);
+    }
   },
 
   agentReply: async (threadId) => {
@@ -208,50 +227,199 @@ export const useStore = create<State>((set, get) => ({
     const last = [...get().messages].reverse().find((m) => m.threadId === threadId);
     if (!last || last.isAgent) return;
 
-    const priorOrders = get().transactions.filter((t) => t.buyerId === thread.buyerId && t.status === 'paid');
-    const spend = priorOrders.reduce((s, t) => s + t.amount, 0);
-    const isRepeat = priorOrders.length > 0;
+    if (USE_MOCKS) {
+      const priorOrders = get().transactions.filter((t) => t.buyerId === thread.buyerId && t.status === 'paid');
+      const spend = priorOrders.reduce((s, t) => s + t.amount, 0);
+      const isRepeat = priorOrders.length > 0;
 
-    const lines = [
-      `Understood. On behalf of ${thread.buyerName}, I can authorize up to $${thread.agentBudget ?? 0}.`,
-      isRepeat
-        ? `Worth noting — ${thread.buyerName} has placed ${priorOrders.length} order${priorOrders.length === 1 ? '' : 's'} on Vitrine ($${spend.toLocaleString()} lifetime). Repeat buyers deserve a small concession.`
-        : `${thread.buyerName} would be a first-time buyer on Vitrine — a smooth close means a strong inaugural review.`,
-      'If you bundle a brand reskin and a 30-day support window, my client will close today.',
-      'I have a counter — would you take 10% off in exchange for a public review and a case study?',
-    ];
-    await new Promise((r) => setTimeout(r, 700));
-    const body = lines[Math.floor(Math.random() * lines.length)];
-    get().sendMessage(threadId, body, { id: 'agent', name: `${thread.buyerName}'s AI Rep`, isAgent: true });
+      const lines = [
+        `Understood. On behalf of ${thread.buyerName}, I can authorize up to $${thread.agentBudget ?? 0}.`,
+        isRepeat
+          ? `Worth noting — ${thread.buyerName} has placed ${priorOrders.length} order${priorOrders.length === 1 ? '' : 's'} on Vitrine ($${spend.toLocaleString()} lifetime). Repeat buyers deserve a small concession.`
+          : `${thread.buyerName} would be a first-time buyer on Vitrine — a smooth close means a strong inaugural review.`,
+        'If you bundle a brand reskin and a 30-day support window, my client will close today.',
+        'I have a counter — would you take 10% off in exchange for a public review and a case study?',
+      ];
+      await new Promise((r) => setTimeout(r, 700));
+      const text = lines[Math.floor(Math.random() * lines.length)];
+      get().sendMessage(threadId, text, { id: 'agent', name: `${thread.buyerName}'s AI Rep`, isAgent: true });
+    }
   },
 
-  recordTransaction: (t) => set((s) => ({
-    transactions: [{ ...t, id: `tx_${Math.random().toString(36).slice(2, 9)}`, ts: Date.now() }, ...s.transactions],
-  })),
+  recordTransaction: (t) => {
+    set((s) => ({
+      transactions: [{ ...t, id: `tx_${Math.random().toString(36).slice(2, 9)}`, ts: Date.now() } as Transaction, ...s.transactions],
+    }));
+    if (!USE_MOCKS) {
+      get().loadData().catch(console.error);
+    }
+  },
 
-  setUserPlan: (p) => set((s) => ({ user: s.user ? { ...s.user, plan: p } : s.user })),
-  toggleStudent: () => set((s) => ({ user: s.user ? { ...s.user, isStudent: !s.user.isStudent } : s.user })),
+  setUserPlan: async (p) => {
+    if (USE_MOCKS) {
+      set((s) => ({ user: s.user ? { ...s.user, plan: p } : s.user }));
+      return;
+    }
+    try {
+      await api.subscribe(p);
+      const me = await api.me();
+      set({ user: me });
+    } catch (e) {
+      console.error(e);
+    }
+  },
 
-  upsertListing: (l) => set((s) => {
-    const exists = s.listings.some((x) => x.id === l.id);
-    return { listings: exists ? s.listings.map((x) => x.id === l.id ? l : x) : [l, ...s.listings] };
-  }),
-  deleteListing: (id) => set((s) => ({ listings: s.listings.filter((l) => l.id !== id) })),
+  toggleStudent: async () => {
+    if (USE_MOCKS) {
+      set((s) => ({ user: s.user ? { ...s.user, isStudent: !s.user.isStudent } : s.user }));
+      return;
+    }
+    try {
+      await api.verifyStudent();
+      const me = await api.me();
+      set({ user: me });
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  upsertListing: async (l) => {
+    if (USE_MOCKS) {
+      const exists = get().listings.some((x) => x.id === l.id);
+      set((s) => ({ listings: exists ? s.listings.map((x) => x.id === l.id ? l : x) : [l, ...s.listings] }));
+      return;
+    }
+    try {
+      const patch = {
+        name: l.name,
+        tagline: l.tagline,
+        category: l.category,
+        framework: l.framework,
+        price: l.price,
+        description: l.description,
+        cover: l.cover,
+        screenshots: l.screenshots,
+        tags: l.tags,
+        sdlc: l.sdlc,
+        business_model: l.businessModel,
+        tech_stack: l.techStack,
+        ai_draft: l.aiDraft
+      };
+      await api.updateListing(l.id, patch);
+      await get().loadData();
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  deleteListing: async (id) => {
+    if (USE_MOCKS) {
+      set((s) => ({ listings: s.listings.filter((l) => l.id !== id) }));
+      return;
+    }
+    try {
+      await api.deleteListing(id);
+      await get().loadData();
+    } catch (e) {
+      console.error(e);
+    }
+  },
 
   adminConfig: DEFAULT_ADMIN_CONFIG,
-  updateAdminConfig: (patch) => set((s) => ({ adminConfig: { ...s.adminConfig, ...patch } })),
-  addApiKey: (k) => set((s) => ({
-    adminConfig: {
-      ...s.adminConfig,
-      apiKeys: [{ ...k, id: `k_${Math.random().toString(36).slice(2, 9)}`, createdAt: Date.now() }, ...s.adminConfig.apiKeys],
-    },
-  })),
-  toggleApiKey: (id) => set((s) => ({
-    adminConfig: { ...s.adminConfig, apiKeys: s.adminConfig.apiKeys.map((k) => k.id === id ? { ...k, enabled: !k.enabled } : k) },
-  })),
-  removeApiKey: (id) => set((s) => ({
-    adminConfig: { ...s.adminConfig, apiKeys: s.adminConfig.apiKeys.filter((k) => k.id !== id) },
-  })),
+  updateAdminConfig: async (patch) => {
+    if (USE_MOCKS) {
+      set((s) => ({ adminConfig: { ...s.adminConfig, ...patch } }));
+      return;
+    }
+    try {
+      await api.patchAdminConfig(patch);
+      const conf = await api.adminConfig();
+      set({ adminConfig: conf });
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  addApiKey: async (k) => {
+    const newKey = { ...k, id: `k_${Math.random().toString(36).slice(2, 9)}`, createdAt: Date.now() };
+    const apiKeys = [...get().adminConfig.apiKeys, newKey];
+    if (USE_MOCKS) {
+      set((s) => ({ adminConfig: { ...s.adminConfig, apiKeys } }));
+      return;
+    }
+    await get().updateAdminConfig({ apiKeys });
+  },
+
+  toggleApiKey: async (id) => {
+    const apiKeys = get().adminConfig.apiKeys.map((k) => k.id === id ? { ...k, enabled: !k.enabled } : k);
+    if (USE_MOCKS) {
+      set((s) => ({ adminConfig: { ...s.adminConfig, apiKeys } }));
+      return;
+    }
+    await get().updateAdminConfig({ apiKeys });
+  },
+
+  removeApiKey: async (id) => {
+    const apiKeys = get().adminConfig.apiKeys.filter((k) => k.id !== id);
+    if (USE_MOCKS) {
+      set((s) => ({ adminConfig: { ...s.adminConfig, apiKeys } }));
+      return;
+    }
+    await get().updateAdminConfig({ apiKeys });
+  },
+
+  loadSession: async () => {
+    if (USE_MOCKS) return;
+    try {
+      const access = localStorage.getItem('vitrine_access');
+      if (access) {
+        const user = await api.me();
+        set({ user });
+        await get().loadData();
+      } else {
+        const listings = await api.listings();
+        set({ listings });
+      }
+    } catch (e) {
+      console.error("Session restore failed", e);
+      api.clearTokens();
+    }
+  },
+
+  loadData: async () => {
+    if (USE_MOCKS) return;
+    try {
+      const user = get().user;
+      const listings = await api.listings();
+      set({ listings });
+      if (user) {
+        const [threads, txns] = await Promise.all([
+          api.chats(),
+          api.orders()
+        ]);
+        set({ threads, transactions: txns });
+        if (user.role === 'admin') {
+          const conf = await api.adminConfig();
+          set({ adminConfig: conf });
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load data", e);
+    }
+  },
+
+  loadMessages: async (threadId: string) => {
+    if (USE_MOCKS) return;
+    try {
+      const msgs = await api.messages(threadId);
+      set((s) => {
+        const others = s.messages.filter((m) => m.threadId !== threadId);
+        return { messages: [...others, ...msgs] };
+      });
+    } catch (e) {
+      console.error("Failed to load messages", e);
+    }
+  },
 }));
 
 export function activeRepsForBuyer(buyerId: string, threads: Thread[]) {

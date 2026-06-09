@@ -39,18 +39,56 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const finalRole: Role = mode === 'admin' ? 'admin' : role;
-    signIn({
-      id: `u_${Math.random().toString(36).slice(2, 8)}`,
-      name: name || email.split('@')[0] || 'June Park',
-      email: email || 'june@vitrine.studio',
-      role: finalRole,
-      isStudent: finalRole === 'seller' ? isStudent : false,
-      plan: finalRole === 'seller' ? 'free' : undefined,
-    });
-    onDone();
+
+    const { api, USE_MOCKS } = await import('../lib/api');
+    if (USE_MOCKS) {
+      signIn({
+        id: `u_${Math.random().toString(36).slice(2, 8)}`,
+        name: name || email.split('@')[0] || 'June Park',
+        email: email || 'june@vitrine.studio',
+        role: finalRole,
+        isStudent: finalRole === 'seller' ? isStudent : false,
+        plan: finalRole === 'seller' ? 'free' : undefined,
+      });
+      onDone();
+      return;
+    }
+
+    try {
+      let tokens;
+      const emailVal = email.trim() || (mode === 'admin' ? 'admin@vitrine.io' : finalRole === 'seller' ? 'maker@vitrine.io' : 'buyer@vitrine.io');
+      const passwordVal = pw || (mode === 'admin' ? 'admin' : finalRole === 'seller' ? 'maker' : 'buyer');
+
+      if (mode === 'login') {
+        tokens = await api.login({ email: emailVal, password: passwordVal });
+      } else if (mode === 'signup') {
+        tokens = await api.signup({
+          email: emailVal,
+          password: passwordVal,
+          display_name: name.trim() || emailVal.split('@')[0],
+          role: finalRole,
+        });
+      } else if (mode === 'admin') {
+        tokens = await api.adminLogin({ email: emailVal, password: passwordVal });
+      }
+
+      if (tokens && tokens.access_token) {
+        api.setTokens(tokens.access_token, tokens.refresh_token);
+        const me = await api.me();
+        signIn(me);
+        // Load operational data from backend
+        const store = useStore.getState();
+        if ((store as any).loadData) {
+          await (store as any).loadData();
+        }
+        onDone();
+      }
+    } catch (err: any) {
+      alert(err.message || "Authentication failed");
+    }
   };
 
   if (mode === 'admin') {

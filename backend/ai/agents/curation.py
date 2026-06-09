@@ -18,17 +18,53 @@ def _score(signals: dict[str, float]) -> float:
 
 
 async def run(listing_id: str) -> dict:
-    # TODO Phase 2: compute real signals (completeness from listing_fields,
-    # bayesian rating, demo uptime, recency decay, engagement) + cached
-    # vision_score_ui on the cover. Scaffold uses placeholder signals.
-    signals = {"completeness": 0.9, "verification": 1.0, "reviews": 0.85,
-               "ui": 0.9, "demo_health": 0.95, "recency": 0.8, "engagement": 0.7}
+    from backend.ai.tools import compute_features, bayesian_rating, vision_score_ui
+    
+    feats = await compute_features(listing_id)
+    completeness = feats.get("completeness", 80) / 100.0
+    recency = feats.get("recency", 80) / 100.0
+    
+    async with SessionLocal() as db:
+        listing = await db.get(Listing, listing_id)
+        if not listing:
+            return {"listing_id": listing_id, "error": "Listing not found"}
+        verification = 1.0 if listing.status == "live" else 0.5
+        demo_health = {"live": 1.0, "degraded": 0.5, "down": 0.0}.get(listing.demo_health, 1.0)
+        cover_url = listing.cover or ""
+        
+    rating_res = await bayesian_rating(listing_id)
+    reviews = rating_res.get("rating", 4.0) / 5.0
+    
+    ui_res = await vision_score_ui(cover_url)
+    ui = ui_res.get("ui_score", 0.8)
+    
+    engagement = 0.7
+    
+    signals = {
+        "completeness": completeness,
+        "verification": verification,
+        "reviews": reviews,
+        "ui": ui,
+        "demo_health": demo_health,
+        "recency": recency,
+        "engagement": engagement
+    }
+    
     score = _score(signals)
     breakdown = [{"label": k, "value": round(v * 100)} for k, v in signals.items()]
+    
     async with SessionLocal() as db:
         listing = await db.get(Listing, listing_id)
         if listing:
             listing.vitrine_score = score
             listing.score_breakdown = breakdown
+            badges = []
+            if score >= 80:
+                badges.append("Best UI")
+            if completeness >= 0.9:
+                badges.append("Curator Choice")
+            listing.badges = badges
+            db.add(listing)
             await db.commit()
+            
     return {"listing_id": listing_id, "vitrine_score": score, "breakdown": breakdown}

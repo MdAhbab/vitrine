@@ -83,25 +83,67 @@ export function BargainModal({ open, onClose, product, onOpenInbox }: { open: bo
     setStep('terms');
   };
 
-  const dispatch = () => {
+  const dispatch = async () => {
     if (!user || atLimit) return;
-    const id = startThread({
-      productId: product.id, productName: product.name, productCover: product.cover,
-      buyerId: user.id, buyerName: user.name,
-      sellerId: `seller_${product.seller.handle}`, sellerName: product.seller.name,
-      isAgent: true, agentBudget: budget,
-    });
-    const briefSummary = aiSummary || `Brief: ${productInfo.useCase || 'general use'}.`;
-    const opener = {
-      firm: `Hi — I represent ${user.name}. They are ready to close ${product.name} today at $${budget}. That's a firm offer in exchange for a same-day commit.\n\nContext I'm working from: ${briefSummary}`,
-      warm: `Hello! I'm ${user.name}'s buying rep. They've been studying ${product.name} and would love to bring it home at $${budget}. Open to bundling Setup if it helps the math.\n\nContext I'm working from: ${briefSummary}`,
-      curious: `Hi — quick one on behalf of ${user.name}. They're between ${product.name} and one other piece. Is there room at $${budget}? Happy to add a public review.\n\nContext I'm working from: ${briefSummary}`,
-    }[tone];
-    sendMessage(id, opener, { id: 'agent', name: `${user.name}'s AI Rep`, isAgent: true });
-    if (productInfo.mustHaves.trim()) sendMessage(id, `Must-haves from ${user.name}: ${productInfo.mustHaves}`, { id: 'agent', name: `${user.name}'s AI Rep`, isAgent: true });
-    if (note.trim()) sendMessage(id, `Note from ${user.name}: ${note}`, { id: 'agent', name: `${user.name}'s AI Rep`, isAgent: true });
-    onClose();
-    onOpenInbox();
+
+    const { api, USE_MOCKS } = await import('../lib/api');
+    if (USE_MOCKS) {
+      const id = startThread({
+        productId: product.id, productName: product.name, productCover: product.cover,
+        buyerId: user.id, buyerName: user.name,
+        sellerId: `seller_${product.seller.handle}`, sellerName: product.seller.name,
+        isAgent: true, agentBudget: budget,
+      });
+      const briefSummary = aiSummary || `Brief: ${productInfo.useCase || 'general use'}.`;
+      const opener = {
+        firm: `Hi — I represent ${user.name}. They are ready to close ${product.name} today at $${budget}. That's a firm offer in exchange for a same-day commit.\n\nContext I'm working from: ${briefSummary}`,
+        warm: `Hello! I'm ${user.name}'s buying rep. They've been studying ${product.name} and would love to bring it home at $${budget}. Open to bundling Setup if it helps the math.\n\nContext I'm working from: ${briefSummary}`,
+        curious: `Hi — quick one on behalf of ${user.name}. They're between ${product.name} and one other piece. Is there room at $${budget}? Happy to add a public review.\n\nContext I'm working from: ${briefSummary}`,
+      }[tone];
+      sendMessage(id, opener, { id: 'agent', name: `${user.name}'s AI Rep`, isAgent: true });
+      if (productInfo.mustHaves.trim()) sendMessage(id, `Must-haves from ${user.name}: ${productInfo.mustHaves}`, { id: 'agent', name: `${user.name}'s AI Rep`, isAgent: true });
+      if (note.trim()) sendMessage(id, `Note from ${user.name}: ${note}`, { id: 'agent', name: `${user.name}'s AI Rep`, isAgent: true });
+      onClose();
+      onOpenInbox();
+      return;
+    }
+
+    try {
+      const briefSummary = aiSummary || `Brief: ${productInfo.useCase || 'general use'}.`;
+      const thread = await api.startNegotiation({
+        listing_id: product.id,
+        budget: budget,
+        readme_context: productInfo.readme || briefSummary,
+      });
+
+      const opener = {
+        firm: `Hi — I represent ${user.name}. They are ready to close ${product.name} today at $${budget}. That's a firm offer in exchange for a same-day commit.\n\nContext I'm working from: ${briefSummary}`,
+        warm: `Hello! I'm ${user.name}'s buying rep. They've been studying ${product.name} and would love to bring it home at $${budget}. Open to bundling Setup if it helps the math.\n\nContext I'm working from: ${briefSummary}`,
+        curious: `Hi — quick one on behalf of ${user.name}. They're between ${product.name} and one other piece. Is there room at $${budget}? Happy to add a public review.\n\nContext I'm working from: ${briefSummary}`,
+      }[tone];
+
+      await api.send(thread.id, opener, true);
+      if (productInfo.mustHaves.trim()) {
+        await api.send(thread.id, `Must-haves from ${user.name}: ${productInfo.mustHaves}`, true);
+      }
+      if (note.trim()) {
+        await api.send(thread.id, `Note from ${user.name}: ${note}`, true);
+      }
+
+      // Reload chat list
+      const store = useStore.getState();
+      if ((store as any).loadData) {
+        await (store as any).loadData();
+      }
+
+      // Trigger negotiate agent reply async
+      api.negotiate(thread.id).catch(() => {});
+
+      onClose();
+      onOpenInbox();
+    } catch (err: any) {
+      alert(err.message || "Failed to start negotiation");
+    }
   };
 
   return (

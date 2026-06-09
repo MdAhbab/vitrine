@@ -8,6 +8,7 @@ Phase 2/4 (see backend.md §14 managed preview hosting).
 from __future__ import annotations
 
 from urllib.parse import urlparse
+import httpx
 
 from fastapi import APIRouter, FastAPI
 
@@ -30,8 +31,15 @@ async def validate(url: str) -> dict:
 async def health_check(url: str) -> dict:
     if not _host_allowed(url):
         return {"url": url, "health": "down", "reason": "host not allow-listed"}
-    # TODO Phase 2: real async GET with timeout + render signal -> live|degraded|down.
-    return {"url": url, "health": "live"}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            res = await client.get(url)
+            if res.is_success:
+                return {"url": url, "health": "live"}
+            else:
+                return {"url": url, "health": "degraded", "reason": f"HTTP status {res.status_code}"}
+    except Exception as e:
+        return {"url": url, "health": "down", "reason": str(e)}
 
 
 app = FastAPI(title="Vitrine hosting")

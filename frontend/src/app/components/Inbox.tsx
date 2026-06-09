@@ -11,7 +11,23 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
     return t.sellerId === viewer.id;
   });
   const [activeId, setActiveId] = useState<string | undefined>(visible[0]?.id);
-  useEffect(() => { if (!visible.find((t) => t.id === activeId)) setActiveId(visible[0]?.id); }, [visible.map((t) => t.id).join()]);
+  const loadMessages = useStore((s: any) => s.loadMessages);
+  
+  useEffect(() => {
+    if (!visible.find((t) => t.id === activeId)) {
+      setActiveId(visible[0]?.id);
+    }
+  }, [visible.map((t) => t.id).join()]);
+
+  useEffect(() => {
+    if (activeId && loadMessages) {
+      loadMessages(activeId).catch(() => {});
+      const t = setInterval(() => {
+        loadMessages(activeId).catch(() => {});
+      }, 3000);
+      return () => clearInterval(t);
+    }
+  }, [activeId]);
 
   const active = visible.find((t) => t.id === activeId);
   const msgs = messages.filter((m) => m.threadId === activeId);
@@ -19,12 +35,26 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [msgs.length]);
 
-  const send = () => {
+  const send = async () => {
     if (!input.trim() || !active || role === 'admin') return;
-    sendMessage(active.id, input, { id: viewer.id, name: viewer.name });
-    setInput('');
-    if (active.isAgent && role === 'seller') {
-      setTimeout(() => agentReply(active.id), 600);
+    const { api, USE_MOCKS } = await import('../lib/api');
+    if (USE_MOCKS) {
+      sendMessage(active.id, input, { id: viewer.id, name: viewer.name });
+      setInput('');
+      if (active.isAgent && role === 'seller') {
+        setTimeout(() => agentReply(active.id), 600);
+      }
+      return;
+    }
+
+    try {
+      await sendMessage(active.id, input, { id: viewer.id, name: viewer.name });
+      setInput('');
+      if (active.isAgent && role === 'seller') {
+        api.negotiate(active.id).catch(() => {});
+      }
+    } catch (e: any) {
+      alert(e.message || "Failed to send message");
     }
   };
 

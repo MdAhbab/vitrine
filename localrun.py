@@ -240,7 +240,7 @@ def build_processes(selected: list[str], with_frontend: bool) -> list[Proc]:
     for name, (target, port) in SERVICES.items():
         if selected and name not in selected:
             continue
-        mod_path = BACKEND / Path(target.split(":")[0].replace(".", "/")).with_suffix(".py")
+        mod_path = ROOT / Path(target.split(":")[0].replace(".", "/")).with_suffix(".py")
         if not mod_path.exists():
             warn(f"[{name}] {target} not found — skipping (scaffold per backend.md).")
             continue

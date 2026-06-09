@@ -49,8 +49,12 @@ function parseHash(): Route {
 
 export default function App() {
   useTheme();
-  const { user } = useStore();
+  const { user, loadSession } = useStore();
   const [route, setRoute] = useState<Route>(() => parseHash());
+
+  useEffect(() => {
+    loadSession().catch(console.error);
+  }, [loadSession]);
   const [previewing, setPreviewing] = useState<Product | null>(null);
   const [concierge, setConcierge] = useState(false);
   const [bargain, setBargain] = useState<Product | null>(null);
