@@ -3,33 +3,42 @@ Seed demo data so the storefront + dashboards aren't empty.
 
     python -m backend.seed        (or: python backend/seed.py)
 
-Idempotent: skips if the demo admin already exists. Creates tables first.
-Mirrors a slice of frontend/src/app/lib/mockData.ts so the UI feels populated.
-Demo logins:  admin@vitrine.io / admin   ·   maker@vitrine.io / maker   ·   buyer@vitrine.io / buyer
+Creates tables, then seeds v2 demo data (idempotent via seed_version flag).
+Mirrors frontend mock IDs where possible.
+
+Demo logins (password = email local-part):
+  admin@vitrine.io   / admin
+  june@vitrine.io    / june      (buyer)
+  marco@vitrine.io   / marco     (buyer)
+  maker@vitrine.io   / maker     (seller — Atelier Foxglove)
+  dev@vitrine.io     / dev       (seller — Studio Korr)
 """
 from __future__ import annotations
 
 import asyncio
 
-from sqlalchemy import select
-
-from backend.shared.db import SessionLocal, create_all
+from backend.shared.db import SessionLocal, create_all, drop_all
 from backend.shared.ids import slugify
 from backend.shared.models import (
     AdminConfig,
+    Chat,
+    ChatMessage,
     Listing,
+    ListingEmbedding,
     ListingField,
     ListingTier,
+    Negotiation,
     User,
-    ListingEmbedding,
 )
 from backend.shared.security import hash_password
 from backend.ai.client import client
 
+SEED_VERSION = "2"
+
 COVER = "https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=1600&q=80"
 SHOTS = [
     COVER,
-    "https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=1600&q=80"
+    "https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=1600&q=80",
 ]
 
 COVERS = {
@@ -46,270 +55,81 @@ COVERS = {
     "healthcare": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=1600&q=80",
 }
 
-DEMO_LISTINGS = [
-    # Dashboards
-    (
-        "Halcyon",
-        "A quiet operations cockpit",
-        "Dashboards",
-        89,
-        "Next.js",
-        96,
-        ["saas", "admin", "charts"],
-        "dashboard",
-        "A quiet operations cockpit for early-stage startup operators, designed with a focus on restrained typography and zero clutter. Integrates with Stripe, Github, and Vercel APIs to provide a single view of your company health.",
-    ),
-    (
-        "Cantata Dash",
-        "Charts as composition",
-        "Dashboards",
-        119,
-        "Vue",
-        93,
-        ["dashboard", "vue", "charts"],
-        "dashboard",
-        "A beautiful modular dashboard for audio-processing workflows and music metadata metrics. Fully themed with smooth dark transitions and WebAudio visualisations.",
-    ),
+# (name, tagline, category, price, framework, score, tags, cover_key, description, seller_key)
+# seller_key: "foxglove" | "korr"
+LISTINGS = [
+    # ── Atelier Foxglove (maker) ──────────────────────────────────────────
+    ("Halcyon", "A quiet operations cockpit", "Dashboards", 89, "Next.js", 96,
+     ["saas", "admin", "charts"], "dashboard",
+     "A quiet operations cockpit for early-stage startup operators.", "foxglove"),
+    ("Cantata Dash", "Charts as composition", "Dashboards", 119, "Vue", 93,
+     ["dashboard", "vue", "charts"], "dashboard",
+     "Modular dashboard for audio-processing workflows and music metadata.", "foxglove"),
+    ("Foxglove Analytics", "Editorial analytics for serious teams", "Analytics", 129, "React", 94,
+     ["analytics", "charts", "b2b"], "analytics",
+     "Privacy-first, self-hostable analytics designed for creators.", "foxglove"),
+    ("Plumb Line", "Deep-nested funnel analytics", "Analytics", 149, "Svelte", 91,
+     ["analytics", "funnels", "saas"], "analytics",
+     "Specialized analytics for nested user conversions and checkout tunnels.", "foxglove"),
+    ("Lumen Commerce", "Headless storefront with taste", "E-commerce", 149, "Next.js", 92,
+     ["commerce", "stripe", "headless"], "ecommerce",
+     "Gorgeous storefront on Stripe and Shopify APIs with fluid animations.", "foxglove"),
+    ("Maisonette", "Boutique digital goods checkout", "E-commerce", 79, "Remix", 90,
+     ["commerce", "checkout", "digital"], "ecommerce",
+     "Minimal checkout for authors and developers selling digital downloads.", "foxglove"),
+    ("Atrium AI", "A chat surface that respects you", "AI", 79, "React", 95,
+     ["ai", "chat", "sse"], "ai",
+     "Modular LLM chat interface with Markdown, LaTeX, and streaming.", "foxglove"),
+    ("Hermes Vector", "Semantic search pipeline in a box", "AI", 159, "Next.js", 93,
+     ["ai", "vector", "search"], "ai",
+     "Ready-to-run search wrapper with a clean web GUI for semantic queries.", "foxglove"),
+    ("Pulse Board", "Realtime ops metrics wall", "Dashboards", 109, "React", 92,
+     ["dashboard", "realtime", "metrics"], "dashboard",
+     "Wall-mounted ops display with WebSocket feeds and alert thresholds.", "foxglove"),
+    ("Drift Commerce", "Subscription storefront kit", "E-commerce", 169, "Next.js", 91,
+     ["commerce", "subscriptions", "stripe"], "ecommerce",
+     "Stripe Billing integration with proration, trials, and customer portal.", "foxglove"),
+    ("Ledger Field", "Finance dashboards, restrained", "Finance", 199, "React", 91,
+     ["finance", "charts", "ledger"], "finance",
+     "Double-entry bookkeeping frontend with keyboard shortcut navigation.", "foxglove"),
 
-    # Analytics
-    (
-        "Foxglove Analytics",
-        "Editorial analytics for serious teams",
-        "Analytics",
-        129,
-        "React",
-        94,
-        ["analytics", "charts", "b2b"],
-        "analytics",
-        "Privacy-first, self-hostable analytics designed for creators. Generates editorial-grade report pages and handles high throughput tracking via serverless functions.",
-    ),
-    (
-        "Plumb Line",
-        "Deep-nested funnel analytics",
-        "Analytics",
-        149,
-        "Svelte",
-        91,
-        ["analytics", "funnels", "saas"],
-        "analytics",
-        "A specialized analytics application for visualising nested user conversions and multi-path checkout tunnels. Built using Svelte for extremely fast rendering.",
-    ),
-
-    # E-commerce
-    (
-        "Lumen Commerce",
-        "Headless storefront with taste",
-        "E-commerce",
-        149,
-        "Next.js",
-        92,
-        ["commerce", "stripe", "headless"],
-        "ecommerce",
-        "A gorgeous storefront built on top of Stripe and Shopify APIs. Features instant page loads, client-side cart synchronization, and fluid layout-shift animations.",
-    ),
-    (
-        "Maisonette",
-        "Boutique digital goods checkout",
-        "E-commerce",
-        79,
-        "Remix",
-        90,
-        ["commerce", "checkout", "digital"],
-        "ecommerce",
-        "Minimal checkout application optimized for authors, designers, and developers selling digital downloads, software licenses, or artwork direct to buyers.",
-    ),
-
-    # AI
-    (
-        "Atrium AI",
-        "A chat surface that respects you",
-        "AI",
-        79,
-        "React",
-        95,
-        ["ai", "chat", "sse"],
-        "ai",
-        "A modular chat interface for LLMs with full support for Markdown formatting, LaTeX formulas, code editing highlights, and customizable streaming parameters.",
-    ),
-    (
-        "Hermes Vector",
-        "Semantic search pipeline in a box",
-        "AI",
-        159,
-        "Next.js",
-        93,
-        ["ai", "vector", "search"],
-        "ai",
-        "A ready-to-run search wrapper that indexes local folders and hosts a clean web GUI for lightning-fast semantic queries using local transformer models.",
-    ),
-
-    # Finance
-    (
-        "Ledger Field",
-        "Finance dashboards, restrained",
-        "Finance",
-        199,
-        "React",
-        91,
-        ["finance", "charts", "ledger"],
-        "finance",
-        "Double-entry bookkeeping frontend that makes ledger auditing beautiful. Built with keyboard shortcut navigations and offline synchronization models.",
-    ),
-    (
-        "Compass Trading Desk",
-        "Production-grade trading desk",
-        "Finance",
-        24900,
-        "React",
-        96,
-        ["finance", "trading", "full-app", "enterprise"],
-        "finance",
-        "A high-frequency dashboard interface built with canvas-based stock charting libraries, order execution workflows, and multi-exchange API sync adapters.",
-    ),
-
-    # CRM
-    (
-        "Korr CRM",
-        "A CRM you actually open on Mondays",
-        "CRM",
-        99,
-        "Remix",
-        90,
-        ["crm", "pipeline", "sales"],
-        "crm",
-        "A CRM that avoids complex forms and instead focuses on a visual drag-and-drop kanban pipeline, keyboard-focused notes entry, and automatic emails followups.",
-    ),
-    (
-        "Apex Contact",
-        "High-velocity sales pipeline",
-        "CRM",
-        149,
-        "React",
-        89,
-        ["crm", "sales", "contacts"],
-        "crm",
-        "Contact management utility designed for small teams. Syncs with Google Contacts, extracts social links automatically, and records history timeline events.",
-    ),
-
-    # CMS
-    (
-        "Margins",
-        "A writing-first CMS",
-        "CMS",
-        59,
-        "Astro",
-        89,
-        ["cms", "markdown", "mdx"],
-        "cms",
-        "A light publishing engine focused on MDX articles, beautiful typographic layouts, and instant static-site deployments to Github Pages or Netlify.",
-    ),
-    (
-        "Vellum Press",
-        "Headless publishing engine",
-        "CMS",
-        89,
-        "Next.js",
-        91,
-        ["cms", "publishing", "headless"],
-        "cms",
-        "A headless CMS offering a sleek editor surface, media organizer, version control history, and quick webhook deployments to any web backend service.",
-    ),
-
-    # Productivity
-    (
-        "Quiet Hours",
-        "Personal productivity, distilled",
-        "Productivity",
-        39,
-        "React",
-        88,
-        ["productivity", "pwa", "focus"],
-        "productivity",
-        "A distraction-free task organizer featuring focus timers, minimalist note pads, calendar integration, and a highly customizable theme manager.",
-    ),
-    (
-        "North Inbox",
-        "A team inbox in monochrome",
-        "Productivity",
-        89,
-        "React",
-        90,
-        ["inbox", "team", "productivity"],
-        "productivity",
-        "A clean team inbox tool designed to group client messages from email, SMS, and WhatsApp into one unified visual surface without the bloated clutter.",
-    ),
-
-    # Auth
-    (
-        "Foundry Auth",
-        "Auth that disappears",
-        "Auth",
-        69,
-        "Next.js",
-        86,
-        ["auth", "oauth", "security"],
-        "auth",
-        "Self-contained login gate with support for social OAuth providers, email magic links, passkeys, and built-in user invitation managers.",
-    ),
-    (
-        "Keykeep",
-        "Multi-tenant authorization proxy",
-        "Auth",
-        129,
-        "Go",
-        89,
-        ["auth", "security", "rbac"],
-        "auth",
-        "A lightweight auth middleware component running side-car style to enforce role-based access rules on existing microservices instantly.",
-    ),
-
-    # Enterprise
-    (
-        "Maison ERP",
-        "A full enterprise resource platform",
-        "Enterprise",
-        18500,
-        "Next.js",
-        97,
-        ["enterprise", "erp", "full-app"],
-        "enterprise",
-        "An enterprise portal designed to connect inventory management, purchase orders, client invoicing, and human resources under a single deployment.",
-    ),
-    (
-        "Aegis Governance",
-        "Compliance and audit log engine",
-        "Enterprise",
-        15000,
-        "Next.js",
-        95,
-        ["enterprise", "compliance", "audit"],
-        "enterprise",
-        "A regulatory dashboard designed to track compliance across team permissions, system event logging, security audits, and key rotations.",
-    ),
-
-    # Healthcare
-    (
-        "Vitrine Telehealth",
-        "HIPAA-aware telehealth platform",
-        "Healthcare",
-        32000,
-        "Next.js",
-        95,
-        ["healthcare", "enterprise", "telehealth"],
-        "healthcare",
-        "A telehealth application offering video consultations, patient scheduling portals, prescription tracking, and full compliance auditing reports.",
-    ),
-    (
-        "CardioSync",
-        "Patient vitals monitoring client",
-        "Healthcare",
-        18000,
-        "React",
-        93,
-        ["healthcare", "vitals", "iot"],
-        "healthcare",
-        "Dashboard connecting to cardiac IoT devices. Displays real-time ECG readings, records event logs, and alerts healthcare staff to custom trigger conditions.",
-    ),
+    # ── Studio Korr (dev) ─────────────────────────────────────────────────
+    ("Korr CRM", "A CRM you actually open on Mondays", "CRM", 99, "Remix", 90,
+     ["crm", "pipeline", "sales"], "crm",
+     "Visual kanban pipeline with keyboard-focused notes and follow-ups.", "korr"),
+    ("Apex Contact", "High-velocity sales pipeline", "CRM", 149, "React", 89,
+     ["crm", "sales", "contacts"], "crm",
+     "Contact management for small teams with Google Contacts sync.", "korr"),
+    ("Margins", "A writing-first CMS", "CMS", 59, "Astro", 89,
+     ["cms", "markdown", "mdx"], "cms",
+     "Light publishing engine focused on MDX and typographic layouts.", "korr"),
+    ("Vellum Press", "Headless publishing engine", "CMS", 89, "Next.js", 91,
+     ["cms", "publishing", "headless"], "cms",
+     "Headless CMS with media organizer and version control history.", "korr"),
+    ("Quiet Hours", "Personal productivity, distilled", "Productivity", 39, "React", 88,
+     ["productivity", "pwa", "focus"], "productivity",
+     "Distraction-free task organizer with focus timers and theme manager.", "korr"),
+    ("North Inbox", "A team inbox in monochrome", "Productivity", 89, "React", 90,
+     ["inbox", "team", "productivity"], "productivity",
+     "Unified inbox for email, SMS, and WhatsApp without the clutter.", "korr"),
+    ("Foundry Auth", "Auth that disappears", "Auth", 69, "Next.js", 86,
+     ["auth", "oauth", "security"], "auth",
+     "Self-contained login gate with OAuth, magic links, and passkeys.", "korr"),
+    ("Keykeep", "Multi-tenant authorization proxy", "Auth", 129, "Go", 89,
+     ["auth", "security", "rbac"], "auth",
+     "Lightweight auth middleware for role-based access on microservices.", "korr"),
+    ("Signal CRM", "Outbound sales sequencer", "CRM", 129, "Next.js", 90,
+     ["crm", "outbound", "sequences"], "crm",
+     "Email sequences, LinkedIn touchpoints, and pipeline scoring in one app.", "korr"),
+    ("Nimbus CMS", "Multilingual content hub", "CMS", 119, "Next.js", 92,
+     ["cms", "i18n", "headless"], "cms",
+     "Headless CMS with locale fallbacks, translation workflows, and webhooks.", "korr"),
+    ("Compass Trading Desk", "Production-grade trading desk", "Finance", 24900, "React", 96,
+     ["finance", "trading", "enterprise"], "finance",
+     "Canvas-based charting, order execution, and multi-exchange API sync.", "korr"),
+    ("Vitrine Telehealth", "HIPAA-aware telehealth platform", "Healthcare", 32000, "Next.js", 95,
+     ["healthcare", "enterprise", "telehealth"], "healthcare",
+     "Video consultations, scheduling, and compliance auditing reports.", "korr"),
 ]
 
 DEFAULT_CONFIG = {
@@ -319,82 +139,252 @@ DEFAULT_CONFIG = {
         "pricingAgent": "You are Vitrine's Pricing & Pitch agent. Auto-quote custom-feature requests.",
         "verification": "You are Vitrine's Verification agent. Flag, do not auto-approve, anything > $5,000.",
     },
-    "flags": {"aiBargain": True, "conciergeSearch": True, "enterpriseTier": True,
-              "studentDiscount": True, "newSignupsOpen": True},
-    "fees": {"commissionFree": 12, "commissionStudio": 8, "commissionAtelier": 5,
-             "commissionMaison": 3, "enterprise": 2, "processing": 2.5},
+    "flags": {
+        "aiBargain": True, "conciergeSearch": True, "enterpriseTier": True,
+        "studentDiscount": True, "newSignupsOpen": True,
+    },
+    "fees": {
+        "commissionFree": 12, "commissionStudio": 8, "commissionAtelier": 5,
+        "commissionMaison": 3, "enterprise": 2, "processing": 2.5,
+    },
     "escrow": {"holdHours": 48, "refundWindow": 7, "autoRelease": True},
-    "branding": {"headline": "Software, but make it editorial.",
-                 "tagline": "A boutique marketplace for live, runnable software.",
-                 "supportEmail": "curator@vitrine.io"},
+    "branding": {
+        "headline": "Software, but make it editorial.",
+        "tagline": "A boutique marketplace for live, runnable software.",
+        "supportEmail": "curator@vitrine.io",
+    },
     "notes": "",
     "api_keys": [],
 }
 
 
+async def _add_listing(db, owner_id: str, spec: tuple) -> Listing:
+    name, tagline, cat, price, fw, score, tags, cover_key, desc, _seller = spec
+    cover_url = COVERS.get(cover_key, COVER)
+    listing = Listing(
+        owner_id=owner_id, name=name, slug=slugify(name), tagline=tagline,
+        category=cat, tags=tags, framework=fw, price_cents=price * 100,
+        license="MIT", status="live", demo_url="https://demo.vitrine.app",
+        demo_health="live", vitrine_score=score, cover=cover_url,
+        screenshots=[cover_url] + SHOTS,
+        badges=["verified", "live-demo"] + (["best-ui"] if score >= 93 else []),
+        description=desc,
+        rating=round(4.2 + (score % 8) / 10, 1),
+        reviews_count=24 + (score % 50),
+        rating_distribution=[2, 4, 10, 28, 56],
+        score_breakdown=[
+            {"label": "Completeness", "value": 90},
+            {"label": "UI craft", "value": score - 2},
+            {"label": "Demo health", "value": 94},
+        ],
+        sdlc={
+            "problem": f"Teams stitch together five tools for {cat.lower()} work.",
+            "solution": "A focused codebase shipping the 80% you actually use.",
+            "methodology": "Designed in the open; built in two-week cycles.",
+            "discussions": "How opinionated should the data layer remain?",
+        },
+        business_model={
+            "kind": "for-profit",
+            "pitch": "A commercial codebase you can rebrand and bill against.",
+            "revenueStreams": ["Source license sales", "Bespoke commissions"],
+        },
+        tech_stack=[fw, "TypeScript", "Tailwind CSS", "PostgreSQL"],
+    )
+    db.add(listing)
+    await db.flush()
+
+    embedding = await client.embed(f"{name} {tagline} {cat} {' '.join(tags)}")
+    db.add(ListingEmbedding(listing_id=listing.id, embedding=embedding))
+    db.add_all([
+        ListingTier(listing_id=listing.id, name="Source", price_cents=price * 100,
+                    features=["Full source code", "MIT license", "Email support"]),
+        ListingTier(listing_id=listing.id, name="Source + Setup",
+                    price_cents=(price + 80) * 100, recommended=True,
+                    features=["Onboarding call", "30 days of fixes"]),
+        ListingField(listing_id=listing.id, section="Development", key="Stack",
+                     value=f"{fw} · TypeScript · Tailwind", source="ai", confidence=0.9),
+        ListingField(listing_id=listing.id, section="Data", key="Database",
+                     value="Postgres", source="ai", confidence=0.85),
+    ])
+    return listing
+
+
+async def _add_chat(
+    db,
+    *,
+    buyer: User,
+    seller: User,
+    listing: Listing,
+    is_agent: bool = False,
+    budget_dollars: int | None = None,
+    messages: list[tuple[str, str, str, bool]],
+) -> Chat:
+    """messages: (sender_id, sender_name, text, is_agent_rep)"""
+    chat = Chat(
+        buyer_id=buyer.id, seller_id=seller.id, listing_id=listing.id,
+        is_agent=is_agent,
+        agent_budget_cents=int(budget_dollars * 100) if budget_dollars else None,
+        status="open",
+        unread_for=["seller"] if messages and messages[-1][0] == buyer.id else ["buyer"],
+    )
+    db.add(chat)
+    await db.flush()
+
+    if is_agent and budget_dollars:
+        db.add(Negotiation(
+            chat_id=chat.id, buyer_id=buyer.id, status="active",
+            budget_cents=budget_dollars * 100,
+            buyer_readme_context="Internal admin dashboard for a 12-person startup. Needs SSO within 30 days.",
+        ))
+
+    for sender_id, sender_name, text, is_rep in messages:
+        db.add(ChatMessage(
+            chat_id=chat.id, sender_id=sender_id, sender_name=sender_name,
+            text=text, is_agent_rep=is_rep,
+        ))
+    return chat
+
+
 async def seed() -> None:
     await create_all()
     async with SessionLocal() as db:
-        if (await db.execute(select(User).where(User.email == "admin@vitrine.io"))).scalar_one_or_none():
-            print("[seed] already seeded — skipping.")
+        version_row = await db.get(AdminConfig, "seed_version")
+        if version_row and version_row.value == SEED_VERSION:
+            print(f"[seed] already at v{SEED_VERSION} — skipping.")
             return
 
-        admin = User(email="admin@vitrine.io", password_hash=hash_password("admin"),
-                     role="admin", display_name="Vitrine Curator")
-        maker = User(email="maker@vitrine.io", password_hash=hash_password("maker"),
-                     role="seller", display_name="Atelier Foxglove", handle="@foxglove",
-                     verified=True, plan="studio")
-        buyer = User(email="buyer@vitrine.io", password_hash=hash_password("buyer"),
-                     role="buyer", display_name="June Park")
-        db.add_all([admin, maker, buyer])
+    print(f"[seed] (re)building database to v{SEED_VERSION}…")
+    await drop_all()
+    await create_all()
+
+    async with SessionLocal() as db:
+        admin = User(
+            email="admin@vitrine.io", password_hash=hash_password("admin"),
+            role="admin", display_name="Vitrine Curator",
+        )
+        buyer_june = User(
+            email="june@vitrine.io", password_hash=hash_password("june"),
+            role="buyer", display_name="June Park",
+        )
+        buyer_marco = User(
+            email="marco@vitrine.io", password_hash=hash_password("marco"),
+            role="buyer", display_name="Marco Rivers",
+        )
+        seller_foxglove = User(
+            email="maker@vitrine.io", password_hash=hash_password("maker"),
+            role="seller", display_name="Atelier Foxglove", handle="@foxglove",
+            verified=True, plan="studio",
+        )
+        seller_korr = User(
+            email="dev@vitrine.io", password_hash=hash_password("dev"),
+            role="seller", display_name="Studio Korr", handle="@korr",
+            verified=True, plan="atelier",
+        )
+        db.add_all([admin, buyer_june, buyer_marco, seller_foxglove, seller_korr])
         await db.flush()
 
-        for name, tagline, cat, price, fw, score, tags, cover_key, desc in DEMO_LISTINGS:
-            cover_url = COVERS.get(cover_key, COVER)
-            listing = Listing(
-                owner_id=maker.id, name=name, slug=slugify(name), tagline=tagline,
-                category=cat, tags=tags, framework=fw, price_cents=price * 100,
-                license="MIT", status="live", demo_url="https://vercel.com",
-                demo_health="live", vitrine_score=score, cover=cover_url, screenshots=[cover_url] + SHOTS,
-                badges=["verified", "live-demo", "best-ui"],
-                description=desc,
-                rating=4.7, reviews_count=128, rating_distribution=[2, 3, 8, 24, 63],
-                score_breakdown=[{"label": "Completeness", "value": 92},
-                                 {"label": "UI craft", "value": score - 2},
-                                 {"label": "Demo health", "value": 96}],
-                sdlc={"problem": f"Teams stitch together five tools for {cat.lower()} work.",
-                      "solution": "A focused codebase shipping the 80% you actually use.",
-                      "methodology": "Designed in the open; built in two-week cycles.",
-                      "discussions": "How opinionated should the data layer remain?"},
-                business_model={"kind": "for-profit",
-                                "pitch": "A commercial codebase you can rebrand and bill against.",
-                                "revenueStreams": ["Source license sales", "Bespoke commissions"]},
-                tech_stack=[fw, "TypeScript", "Tailwind CSS", "PostgreSQL"],
-            )
-            db.add(listing)
-            await db.flush()
+        sellers = {"foxglove": seller_foxglove, "korr": seller_korr}
+        listing_by_name: dict[str, Listing] = {}
+        for spec in LISTINGS:
+            owner = sellers[spec[-1]]
+            listing = await _add_listing(db, owner.id, spec)
+            listing_by_name[listing.name] = listing
 
-            # Generate and add listing embedding
-            embedding = await client.embed(f"{name} {tagline} {cat} {' '.join(tags)}")
-            db.add(ListingEmbedding(listing_id=listing.id, embedding=embedding))
+        halcyon = listing_by_name["Halcyon"]
+        atrium = listing_by_name["Atrium AI"]
+        korr_crm = listing_by_name["Korr CRM"]
+        lumen = listing_by_name["Lumen Commerce"]
+        signal_crm = listing_by_name["Signal CRM"]
 
-            db.add_all([
-                ListingTier(listing_id=listing.id, name="Source", price_cents=price * 100,
-                            features=["Full source code", "MIT license", "Email support"]),
-                ListingTier(listing_id=listing.id, name="Source + Setup",
-                            price_cents=(price + 80) * 100, recommended=True,
-                            features=["Onboarding call", "30 days of fixes"]),
-                ListingField(listing_id=listing.id, section="Development", key="Stack",
-                             value=f"{fw} · TypeScript · Tailwind", source="ai", confidence=0.9),
-                ListingField(listing_id=listing.id, section="Data", key="Database",
-                             value="Postgres", source="ai", confidence=0.85),
-            ])
+        # June ↔ Foxglove on Halcyon (AI rep negotiation)
+        await _add_chat(
+            db, buyer=buyer_june, seller=seller_foxglove, listing=halcyon,
+            is_agent=True, budget_dollars=79,
+            messages=[
+                ("agent", "June Park's AI Rep",
+                 "Hi — I represent June Park. She loves Halcyon and is ready to buy the Source tier today. "
+                 "Could you do $79 instead of $89 for a same-day commit? She'd leave a verified review.", True),
+                (seller_foxglove.id, seller_foxglove.display_name,
+                 "Appreciate the directness. $79 works if she takes Source + Setup at listed price next month.", False),
+                ("agent", "June Park's AI Rep",
+                 "Noted. June can commit to Source today at $79 and schedule Source + Setup for next quarter. "
+                 "Does that work for a signed agreement this week?", True),
+            ],
+        )
+
+        # Marco ↔ Korr on Korr CRM (direct buyer question)
+        await _add_chat(
+            db, buyer=buyer_marco, seller=seller_korr, listing=korr_crm,
+            messages=[
+                (buyer_marco.id, buyer_marco.display_name,
+                 "Hey — does Korr CRM support custom pipeline stages out of the box, or is that a fork?", False),
+                (seller_korr.id, seller_korr.display_name,
+                 "Custom stages are built-in — you define them in settings. No fork needed. "
+                 "Happy to hop on a 15-min walkthrough if useful.", False),
+            ],
+        )
+
+        # Marco ↔ Foxglove on Atrium AI (feature scoping)
+        await _add_chat(
+            db, buyer=buyer_marco, seller=seller_foxglove, listing=atrium,
+            messages=[
+                (buyer_marco.id, buyer_marco.display_name,
+                 "We're evaluating Atrium for an internal copilot. Does the SSE layer handle tool-calling loops?", False),
+                (seller_foxglove.id, seller_foxglove.display_name,
+                 "Yes — the streaming handler supports multi-turn tool calls with a 5-step cap. "
+                 "I can share the architecture doc if you'd like.", False),
+                (buyer_marco.id, buyer_marco.display_name,
+                 "That would be great. Also curious about rate-limit hooks for our API gateway.", False),
+            ],
+        )
+
+        # June ↔ Korr on Lumen Commerce (AI rep, higher budget)
+        await _add_chat(
+            db, buyer=buyer_june, seller=seller_korr, listing=lumen,
+            is_agent=True, budget_dollars=130,
+            messages=[
+                ("agent", "June Park's AI Rep",
+                 "June is building a headless storefront for a design studio. She's authorized up to $130 "
+                 "for Lumen Commerce Source + white-label reskin. Can we close at $125 with a case study?", True),
+                (seller_korr.id, seller_korr.display_name,
+                 "$125 for Source + reskin is tight but doable if she provides logo assets and copy by Friday.", False),
+            ],
+        )
+
+        # June ↔ Korr on Signal CRM (closed thread — settled)
+        settled = await _add_chat(
+            db, buyer=buyer_june, seller=seller_korr, listing=signal_crm,
+            messages=[
+                (buyer_june.id, buyer_june.display_name,
+                 "Is Signal CRM a good fit for a 3-person outbound team?", False),
+                (seller_korr.id, seller_korr.display_name,
+                 "Absolutely — it's built for small outbound teams. Sequences + pipeline in one surface.", False),
+                (buyer_june.id, buyer_june.display_name,
+                 "Sold. I'll take Source + Setup at $209.", False),
+            ],
+        )
+        settled.status = "settled"
+        settled.unread_for = []
 
         for key, value in DEFAULT_CONFIG.items():
             db.add(AdminConfig(key=key, value=value))
+        db.add(AdminConfig(key="seed_version", value=SEED_VERSION))
 
         await db.commit()
-        print("[seed] inserted demo users, listings, and admin config.")
+
+        foxglove_count = sum(1 for s in LISTINGS if s[-1] == "foxglove")
+        korr_count = sum(1 for s in LISTINGS if s[-1] == "korr")
+        print(
+            f"[seed] v{SEED_VERSION}: 1 admin, 2 buyers, 2 sellers, "
+            f"{foxglove_count + korr_count} listings ({foxglove_count} Foxglove / {korr_count} Korr), "
+            f"5 chat threads."
+        )
+        print("[seed] logins:")
+        print("  admin@vitrine.io / admin")
+        print("  june@vitrine.io  / june   (buyer)")
+        print("  marco@vitrine.io / marco  (buyer)")
+        print("  maker@vitrine.io / maker  (seller — Atelier Foxglove)")
+        print("  dev@vitrine.io   / dev    (seller — Studio Korr)")
 
 
 if __name__ == "__main__":

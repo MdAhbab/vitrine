@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 
@@ -97,4 +97,18 @@ def require_role(*roles: Role):
     return _guard
 
 
-# TODO(Phase 2): Redis token-bucket rate limiter dependency (stricter on /ai/*).
+from .ratelimit import enforce_rate_limit
+
+
+def rate_limit(limit: int = 60, window: int = 60, scope: str = "api"):
+    """FastAPI dependency — token-bucket per client IP."""
+
+    async def _guard(request: Request) -> None:
+        await enforce_rate_limit(request, scope=scope, limit=limit, window=window)
+
+    return _guard
+
+
+# Preset limiters (stricter on AI + auth)
+auth_rate_limit = rate_limit(limit=20, window=60, scope="auth")
+ai_rate_limit = rate_limit(limit=30, window=60, scope="ai")

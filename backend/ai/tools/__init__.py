@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 import math
 import json
+from datetime import datetime, timezone
+
 import httpx
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -402,7 +404,11 @@ async def compute_features(id: str) -> dict:
         total_keys = 20
         completeness = round((filled_count / total_keys) * 100)
         
-        days_old = (settings.now() - listing.created_at).days
+        now = datetime.now(timezone.utc)
+        created = listing.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        days_old = (now - created).days
         recency = max(0, min(100, 100 - days_old * 2))
         
         return {"completeness": min(completeness, 100), "recency": recency}
@@ -492,7 +498,12 @@ async def submit_verdict(id: str, verdict: str) -> dict:
     async with SessionLocal() as db:
         listing = await db.get(Listing, id)
         if listing:
-            listing.status = "live" if verdict == "approve" else "rejected"
+            if verdict == "approve":
+                listing.status = "review"
+            elif verdict == "request_changes":
+                listing.status = "draft"
+            else:
+                listing.status = "rejected"
             db.add(listing)
             await db.commit()
             return {"status": listing.status}
@@ -532,4 +543,8 @@ async def draft_negotiation_message(buyer_id: str, seller_id: str, listing_id: s
           }, "required": ["listing_id", "feature_description"]})
 async def estimate_feature_cost(listing_id: str, feature_description: str) -> dict:
     charge = max(150, min(5000, len(feature_description) * 3))
-    return {"estimated_charge": charge}
+    return {
+        "estimated_charge": charge,
+        "range_low": max(100, int(charge * 0.75)),
+        "range_high": min(7500, int(charge * 1.35)),
+    }

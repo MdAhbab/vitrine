@@ -12,7 +12,7 @@ from backend.shared.models import Chat, ChatMessage, Negotiation, User, Order, L
 
 from .base import run_agent, system_prompt_for
 
-SYSTEM = system_prompt_for("Buyer Concierge Agent",  # buyerRep prompt lives in admin_configs
+SYSTEM = system_prompt_for("Buyer Representative Agent",
                            "You are the buyer's negotiating rep. Warm but firm. Never exceed budget.")
 
 

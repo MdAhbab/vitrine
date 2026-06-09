@@ -144,11 +144,22 @@ type State = {
   loadMessages: (threadId: string) => Promise<void>;
 };
 
+export const MOCK_USER_IDS = {
+  buyer: 'demo_buyer',
+  seller: 'demo_seller',
+  admin: 'demo_admin',
+} as const;
+
 const SELLER_USERS: Record<string, { id: string; name: string }> = {};
 PRODUCTS.forEach((p, i) => { SELLER_USERS[p.seller.name] = { id: `seller_${i}`, name: p.seller.name }; });
 
+export function sellerIdFor(product: Product): string {
+  const idx = PRODUCTS.findIndex((p) => p.id === product.id);
+  return `seller_${idx >= 0 ? idx : 0}`;
+}
+
 // Seed: a few demo threads and transactions so admin/seller dashboards never feel empty.
-const SEED_BUYER = { id: 'demo_buyer', name: 'June Park' };
+const SEED_BUYER = { id: MOCK_USER_IDS.buyer, name: 'June Park' };
 const seedThreads: Thread[] = [
   {
     id: 't_seed_1', productId: PRODUCTS[0].id, productName: PRODUCTS[0].name, productCover: PRODUCTS[0].cover,
@@ -428,6 +439,16 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 }));
+
+/** Public gallery products — mock data in dev, API listings when live. */
+export function catalogProducts(listings: Listing[]): Product[] {
+  if (USE_MOCKS) return PRODUCTS;
+  return listings.filter((l) => l.status === 'live');
+}
+
+export function useCatalogProducts(): Product[] {
+  return useStore((s) => catalogProducts(s.listings));
+}
 
 export function activeRepsForBuyer(buyerId: string, threads: Thread[]) {
   return threads.filter((t) => t.buyerId === buyerId && t.isAgent && t.status === 'open');

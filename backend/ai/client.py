@@ -42,21 +42,53 @@ class LLMResult:
 
 class AIClient:
     def __init__(self) -> None:
-        self.enabled = bool(settings.OPENAI_API_KEY)
         self._client = None
-        if self.enabled:
+        self._cached_key: str | None = None
+
+    async def _resolve_api_key(self) -> str | None:
+        if settings.OPENAI_API_KEY:
+            return settings.OPENAI_API_KEY
+        try:
+            from backend.shared.crypto import decrypt_value
+            from backend.shared.db import SessionLocal
+            from backend.shared.models import AdminConfig
+            async with SessionLocal() as db:
+                row = await db.get(AdminConfig, "api_keys")
+                if row and isinstance(row.value, list):
+                    for k in row.value:
+                        if not isinstance(k, dict):
+                            continue
+                        if k.get("provider") == "openai" and k.get("enabled") and k.get("key"):
+                            return decrypt_value(k["key"]) or None
+        except Exception:
+            pass
+        return None
+
+    @property
+    def enabled(self) -> bool:
+        return bool(settings.OPENAI_API_KEY)
+
+    async def _ensure_client(self):
+        key = await self._resolve_api_key()
+        if not key:
+            self._client = None
+            self._cached_key = None
+            return False
+        if self._client is None or key != self._cached_key:
             try:
                 from openai import AsyncOpenAI
-
-                self._client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[ai] OpenAI client init failed, falling back to stub: {exc}")
-                self.enabled = False
+                self._client = AsyncOpenAI(api_key=key)
+                self._cached_key = key
+            except Exception as exc:
+                print(f"[ai] OpenAI client init failed: {exc}")
+                self._client = None
+                return False
+        return True
 
     async def chat(self, messages: list[dict], *, tools: list | None = None,
                    model: str | None = None, stream: bool = False) -> LLMResult:
         model = model or settings.OPENAI_MODEL
-        if not self.enabled:
+        if not await self._ensure_client():
             return self._stub(messages, model)
         resp = await self._client.chat.completions.create(  # type: ignore[union-attr]
             model=model, messages=messages, tools=tools or None,
@@ -73,7 +105,7 @@ class AIClient:
 
     async def embed(self, text: str, *, model: str | None = None) -> list[float]:
         model = model or settings.OPENAI_EMBED_MODEL
-        if not self.enabled:
+        if not await self._ensure_client():
             return _stub_embedding(text)
         resp = await self._client.embeddings.create(model=model, input=text)  # type: ignore[union-attr]
         return resp.data[0].embedding

@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -29,7 +29,8 @@ from backend.shared.schemas.ai import (
     PricingIn,
 )
 from backend.shared.schemas.listing import IntakeIn
-from backend.shared.security import Principal, current_user, require_role
+from backend.shared.crypto import encrypt_value
+from backend.shared.security import Principal, ai_rate_limit, current_user, require_role
 
 from .agents import concierge, feature_estimator, negotiator, pricing, repo_intake
 from .budget import budget
@@ -38,13 +39,19 @@ from .workers import register_handlers
 router = APIRouter(tags=["ai"])
 
 
-@router.post("/ai/intake")
+@router.post("/ai/intake", dependencies=[Depends(ai_rate_limit)])
 async def intake(body: IntakeIn, listing_id: str,
-                 user: Principal = Depends(require_role("seller", "admin"))) -> dict:
+                 user: Principal = Depends(require_role("seller", "admin")),
+                 db: AsyncSession = Depends(get_session)) -> dict:
+    listing = await db.get(Listing, listing_id)
+    if not listing:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
+    if listing.owner_id != user.id and user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Forbidden")
     return await repo_intake.run(listing_id, body.repo_url, body.readme_text)
 
 
-@router.post("/ai/concierge")
+@router.post("/ai/concierge", dependencies=[Depends(ai_rate_limit)])
 async def concierge_stream(body: ConciergeIn, user: Principal = Depends(current_user)):
     async def gen():
         async for chunk in concierge.stream(body.query, body.history):
@@ -52,18 +59,26 @@ async def concierge_stream(body: ConciergeIn, user: Principal = Depends(current_
     return EventSourceResponse(gen())
 
 
-@router.post("/ai/pricing")
+@router.post("/ai/pricing", dependencies=[Depends(ai_rate_limit)])
 async def pricing_suggest(body: PricingIn,
                           user: Principal = Depends(require_role("seller", "admin"))) -> dict:
     return await pricing.run(body.listing_id)
 
 
-@router.post("/ai/negotiate")
-async def negotiate(body: NegotiateIn, user: Principal = Depends(current_user)) -> dict:
+@router.post("/ai/negotiate", dependencies=[Depends(ai_rate_limit)])
+async def negotiate(body: NegotiateIn, user: Principal = Depends(current_user),
+                    db: AsyncSession = Depends(get_session)) -> dict:
+    chat = await db.get(Chat, body.chat_id)
+    if not chat:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat not found")
+    if not chat.is_agent:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not an agent negotiation chat")
+    if chat.buyer_id != user.id and user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the buyer can dispatch the AI rep")
     return await negotiator.next_message(body.chat_id)
 
 
-@router.post("/ai/estimate-feature")
+@router.post("/ai/estimate-feature", dependencies=[Depends(ai_rate_limit)])
 async def estimate_feature(body: EstimateFeatureIn,
                            user: Principal = Depends(current_user)) -> dict:
     return await feature_estimator.estimate(body.listing_id, body.description)
@@ -78,7 +93,7 @@ def _mask(key: str) -> str:
 async def get_config(user: Principal = Depends(require_role("admin")),
                      db: AsyncSession = Depends(get_session)) -> dict:
     rows = {r.key: r.value for r in (await db.execute(select(AdminConfig))).scalars()}
-    api_keys = [{**k, "key": _mask(k.get("key", ""))} for k in rows.get("api_keys", [])]
+    api_keys = [{**k, "key": "••••••••" if k.get("key") else ""} for k in rows.get("api_keys", [])]
     # Shape mirrors frontend AdminConfig; missing keys fall back to {} / [].
     return {
         "systemPrompts": rows.get("system_prompts", {}),
@@ -100,11 +115,33 @@ async def patch_config(patch: dict, user: Principal = Depends(require_role("admi
               "branding": "branding", "notes": "notes"}
     for fe_key, value in patch.items():
         row_key = keymap.get(fe_key, fe_key)
+        stored = value
+        is_encrypted = False
+        if row_key == "api_keys" and isinstance(value, list):
+            is_encrypted = True
+            stored = []
+            existing = (await db.get(AdminConfig, "api_keys"))
+            old_by_id = {}
+            if existing and isinstance(existing.value, list):
+                for k in existing.value:
+                    if isinstance(k, dict) and k.get("id"):
+                        old_by_id[k["id"]] = k.get("key", "")
+            for k in value:
+                if not isinstance(k, dict):
+                    continue
+                entry = dict(k)
+                raw = entry.get("key", "")
+                if raw and "••••" not in raw:
+                    entry["key"] = encrypt_value(raw)
+                elif entry.get("id") in old_by_id:
+                    entry["key"] = old_by_id[entry["id"]]
+                stored.append(entry)
         row = await db.get(AdminConfig, row_key)
         if row:
-            row.value = value
+            row.value = stored
+            row.is_encrypted = is_encrypted or row.is_encrypted
         else:
-            db.add(AdminConfig(key=row_key, value=value))
+            db.add(AdminConfig(key=row_key, value=stored, is_encrypted=is_encrypted))
     await db.commit()
     return {"ok": True}
 

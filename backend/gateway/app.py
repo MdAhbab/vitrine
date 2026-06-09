@@ -44,6 +44,10 @@ async def lifespan(app: FastAPI):
     from backend.ai.workers import register_handlers
     import backend.services.notifications.app  # noqa: F401 (registers order.paid handler)
     register_handlers()
+    if settings.EVENT_BUS == "redis":
+        from backend.shared.events import bus
+        if hasattr(bus, "start_consumer"):
+            await bus.start_consumer()
     yield
 
 

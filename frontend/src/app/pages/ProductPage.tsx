@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Play, Heart, Share2, Check, Star, Bot, Sparkles, Lightbulb, Wrench, Workflow, MessagesSquare, Briefcase, Layers } from 'lucide-react';
 import { Typewriter } from '../components/Typewriter';
-import { PRODUCTS, type Product } from '../lib/mockData';
+import { type Product } from '../lib/mockData';
+import { useCatalogProducts } from '../lib/store';
 import { ProductCard } from '../components/ProductCard';
 import { VitrineScoreRing } from '../components/VitrineScoreRing';
 import { SpecSheet } from '../components/SpecSheet';
@@ -12,10 +13,24 @@ import { ImageWithFallback } from '../components/ImageWithFallback';
 export function ProductPage({
   slug, onOpenProduct, onPreview, onBargain, onRequestFeatures, onCheckout,
 }: { slug: string; onOpenProduct: (s: string) => void; onPreview: (p: Product) => void; onBargain: (p: Product) => void; onRequestFeatures: (p: Product) => void; onCheckout: (p: Product, tier: number) => void }) {
-  const product = PRODUCTS.find((p) => p.slug === slug) ?? PRODUCTS[0];
-  const similar = PRODUCTS.filter((p) => p.category === product.category && p.id !== product.id).slice(0, 4);
+  const products = useCatalogProducts();
+  const product = products.find((p) => p.slug === slug);
   const [activeScreen, setActiveScreen] = useState(0);
   const [tier, setTier] = useState(1);
+
+  if (!product) {
+    return (
+      <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 pt-10 pb-24 text-center">
+        <h1 className="font-serif text-3xl">Piece not found</h1>
+        <p className="text-text-muted mt-3 text-sm">This listing may have been removed or the URL is incorrect.</p>
+        <button onClick={() => { window.location.hash = '#/browse'; }} className="mt-6 text-accent hover:underline text-sm">
+          Return to gallery
+        </button>
+      </main>
+    );
+  }
+
+  const similar = products.filter((p) => p.category === product.category && p.id !== product.id).slice(0, 4);
 
   return (
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 pt-10 pb-24">

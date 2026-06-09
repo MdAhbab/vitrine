@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { SlidersHorizontal, X } from 'lucide-react';
-import { PRODUCTS, CATEGORIES, type Product } from '../lib/mockData';
+import { CATEGORIES, type Product } from '../lib/mockData';
+import { useCatalogProducts } from '../lib/store';
 import { ProductCard } from '../components/ProductCard';
 
 type Sort = 'score' | 'new' | 'price' | 'rating';
 
 export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct: (slug: string) => void; onPreview: (p: Product) => void; onBargain: (p: Product) => void }) {
+  const products = useCatalogProducts();
   const [cats, setCats] = useState<string[]>([]);
   const [maxPrice, setMaxPrice] = useState(50000);
   const [hasDemo, setHasDemo] = useState(false);
@@ -14,10 +16,10 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
   const [sort, setSort] = useState<Sort>('score');
   const [openFilters, setOpenFilters] = useState(false);
 
-  const frameworks = useMemo(() => ['All', ...Array.from(new Set(PRODUCTS.map((p) => p.framework)))], []);
+  const frameworks = useMemo(() => ['All', ...Array.from(new Set(products.map((p) => p.framework)))], [products]);
 
   const filtered = useMemo(() => {
-    let r = PRODUCTS.filter((p) => p.price <= maxPrice);
+    let r = products.filter((p) => p.price <= maxPrice);
     if (cats.length) r = r.filter((p) => cats.includes(p.category));
     if (hasDemo) r = r.filter((p) => p.hasLiveDemo);
     if (framework !== 'All') r = r.filter((p) => p.framework === framework);
@@ -28,7 +30,7 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
       case 'rating': r.sort((a, b) => b.rating - a.rating); break;
     }
     return r;
-  }, [cats, maxPrice, hasDemo, framework, sort]);
+  }, [products, cats, maxPrice, hasDemo, framework, sort]);
 
   const toggleCat = (c: string) => setCats((s) => (s.includes(c) ? s.filter((x) => x !== c) : [...s, c]));
 

@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { ArrowRight, Sparkles, ChevronRight } from 'lucide-react';
-import { PRODUCTS, CATEGORIES, type Product } from '../lib/mockData';
+import { CATEGORIES, type Product } from '../lib/mockData';
+import { useCatalogProducts } from '../lib/store';
 import { ProductCard } from '../components/ProductCard';
 
 export function Home({
@@ -16,13 +17,14 @@ export function Home({
   onBrowse: () => void;
   onBargain: (p: Product) => void;
 }) {
-  const top = [...PRODUCTS].sort((a, b) => b.vitrineScore - a.vitrineScore);
+  const products = useCatalogProducts();
+  const top = [...products].sort((a, b) => b.vitrineScore - a.vitrineScore);
   const bestUi = Array.from(
     new Map(
       [...top.filter((p) => p.badges.includes('best-ui')), ...top].map((p) => [p.id, p])
     ).values()
   ).slice(0, 6);
-  const newThisWeek = [...PRODUCTS].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 6);
+  const newThisWeek = [...products].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 6);
 
   return (
     <main className="relative">

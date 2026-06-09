@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, Github, Mail, Lock, Shield, User as UserIcon, GraduationCap, ShoppingBag, Wrench } from 'lucide-react';
 import { Logo } from '../components/Logo';
-import { useStore, type Role } from '../lib/store';
+import { useStore, MOCK_USER_IDS, type Role } from '../lib/store';
 
 type Mode = 'login' | 'signup' | 'admin';
 
@@ -46,9 +46,9 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
     const { api, USE_MOCKS } = await import('../lib/api');
     if (USE_MOCKS) {
       signIn({
-        id: `u_${Math.random().toString(36).slice(2, 8)}`,
-        name: name || email.split('@')[0] || 'June Park',
-        email: email || 'june@vitrine.studio',
+        id: MOCK_USER_IDS[finalRole],
+        name: name || email.split('@')[0] || (finalRole === 'buyer' ? 'June Park' : finalRole === 'seller' ? 'Atelier Foxglove' : 'Vitrine Curator'),
+        email: email || (finalRole === 'buyer' ? 'june@vitrine.io' : finalRole === 'seller' ? 'maker@vitrine.io' : 'admin@vitrine.io'),
         role: finalRole,
         isStudent: finalRole === 'seller' ? isStudent : false,
         plan: finalRole === 'seller' ? 'free' : undefined,
@@ -59,8 +59,8 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
 
     try {
       let tokens;
-      const emailVal = email.trim() || (mode === 'admin' ? 'admin@vitrine.io' : finalRole === 'seller' ? 'maker@vitrine.io' : 'buyer@vitrine.io');
-      const passwordVal = pw || (mode === 'admin' ? 'admin' : finalRole === 'seller' ? 'maker' : 'buyer');
+      const emailVal = email.trim() || (mode === 'admin' ? 'admin@vitrine.io' : finalRole === 'seller' ? 'maker@vitrine.io' : 'june@vitrine.io');
+      const passwordVal = pw || (mode === 'admin' ? 'admin' : finalRole === 'seller' ? 'maker' : 'june');
 
       if (mode === 'login') {
         tokens = await api.login({ email: emailVal, password: passwordVal });

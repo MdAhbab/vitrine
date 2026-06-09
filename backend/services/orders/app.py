@@ -53,6 +53,8 @@ async def checkout(body: CheckoutIn, user: Principal = Depends(current_user),
     listing = await db.get(Listing, body.listing_id)
     if not listing:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
+    if listing.owner_id == user.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot purchase your own listing")
     seller = await db.get(User, listing.owner_id)
     buyer = await db.get(User, user.id)
 
@@ -221,7 +223,7 @@ async def list_payouts(user: Principal = Depends(require_role("seller", "admin")
 async def request_payout(body: PayoutRequestIn,
                          user: Principal = Depends(require_role("seller", "admin")),
                          db: AsyncSession = Depends(get_session)) -> dict:
-    orders_stmt = select(Order).where(Order.seller_id == user.id, Order.status == "paid")
+    orders_stmt = select(Order).where(Order.seller_id == user.id, Order.status == "delivered")
     paid_orders = (await db.execute(orders_stmt)).scalars().all()
     earned_cents = sum(o.amount_cents - o.commission_cents for o in paid_orders)
     

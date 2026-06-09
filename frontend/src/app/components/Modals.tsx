@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Bot, Sparkles, Check, ShieldCheck, CreditCard, Lock, FileText, Upload } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Product } from '../lib/mockData';
-import { useStore, activeRepsForBuyer } from '../lib/store';
+import { api, USE_MOCKS } from '../lib/api';
+import { useStore, activeRepsForBuyer, sellerIdFor } from '../lib/store';
 
 function Shell({ open, onClose, children, max = 'max-w-lg' }: { open: boolean; onClose: () => void; children: React.ReactNode; max?: string }) {
   return (
@@ -91,7 +93,7 @@ export function BargainModal({ open, onClose, product, onOpenInbox }: { open: bo
       const id = startThread({
         productId: product.id, productName: product.name, productCover: product.cover,
         buyerId: user.id, buyerName: user.name,
-        sellerId: `seller_${product.seller.handle}`, sellerName: product.seller.name,
+        sellerId: sellerIdFor(product), sellerName: product.seller.name,
         isAgent: true, agentBudget: budget,
       });
       const briefSummary = aiSummary || `Brief: ${productInfo.useCase || 'general use'}.`;
@@ -294,8 +296,10 @@ function Label({ v, children }: { v: string; children: React.ReactNode }) {
 }
 
 export function RequestFeaturesModal({ open, onClose, product }: { open: boolean; onClose: () => void; product: Product | null }) {
+  const { user } = useStore();
   const [features, setFeatures] = useState<string[]>([]);
   const [draft, setDraft] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const QUICK = ['Custom branding & domain', 'Stripe + invoicing integration', 'Multi-tenant workspaces', 'Role-based permissions', 'CSV import / export', 'Mobile-responsive polish', 'Analytics dashboard', 'Email notifications'];
 
   const PRICING: Record<string, number> = {
@@ -359,8 +363,32 @@ export function RequestFeaturesModal({ open, onClose, product }: { open: boolean
       </div>
       <footer className="p-4 border-t flex justify-between items-center bg-surface-2/40">
         <button onClick={onClose} className="text-sm text-text-muted">Cancel</button>
-        <button onClick={onClose} disabled={!features.length} className="bg-text text-bg rounded-xl px-5 h-10 text-sm font-medium inline-flex items-center gap-2 disabled:opacity-40">
-          Send to seller →
+        <button
+          onClick={async () => {
+            if (!product || !features.length) return;
+            if (!user && !USE_MOCKS) { toast.error('Sign in to request features'); return; }
+            setSubmitting(true);
+            const description = features.join('; ');
+            if (USE_MOCKS) {
+              toast.success('Feature request sent to seller');
+              onClose();
+              setSubmitting(false);
+              return;
+            }
+            try {
+              await api.featureRequest({ listing_id: product.id, description });
+              toast.success('Feature request submitted — seller will review the AI estimate');
+              onClose();
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : 'Request failed');
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+          disabled={!features.length || submitting}
+          className="bg-text text-bg rounded-xl px-5 h-10 text-sm font-medium inline-flex items-center gap-2 disabled:opacity-40"
+        >
+          {submitting ? 'Sending…' : 'Send to seller →'}
         </button>
       </footer>
     </Shell>
@@ -380,17 +408,34 @@ export function CheckoutModal({ open, onClose, product, tierIndex = 0 }: { open:
   const fee = Math.round(tier.price * 0.025);
   const total = tier.price + fee;
 
-  const submit = () => {
+  const submit = async () => {
     setProcessing(true);
-    setTimeout(() => {
+    if (USE_MOCKS) {
+      setTimeout(() => {
+        recordTransaction({
+          productId: product.id, productName: product.name,
+          buyerId: user?.id ?? 'guest', buyerName: user?.name ?? 'Guest',
+          sellerId: sellerIdFor(product), sellerName: product.seller.name,
+          tier: tier.name, amount: total, commission: Math.round(total * 0.08), status: 'paid',
+        });
+        setStep('done'); setProcessing(false);
+      }, 1200);
+      return;
+    }
+    try {
+      const order = await api.checkout({ listing_id: product.id, tier_index: tierIndex, kind: 'purchase' });
       recordTransaction({
-        productId: product.id, productName: product.name,
-        buyerId: user?.id ?? 'guest', buyerName: user?.name ?? 'Guest',
-        sellerId: `seller_${product.seller.handle}`, sellerName: product.seller.name,
-        tier: tier.name, amount: total, commission: Math.round(total * 0.08), status: 'paid',
+        productId: order.productId, productName: order.productName,
+        buyerId: order.buyerId, buyerName: order.buyerName,
+        sellerId: order.sellerId, sellerName: order.sellerName,
+        tier: order.tier, amount: order.amount, commission: order.commission, status: order.status,
       });
-      setStep('done'); setProcessing(false);
-    }, 1200);
+      setStep('done');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Checkout failed');
+    } finally {
+      setProcessing(false);
+    }
   };
 
   return (

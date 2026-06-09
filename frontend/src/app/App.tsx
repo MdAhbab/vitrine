@@ -29,6 +29,7 @@ type Route =
   | { name: 'login' }
   | { name: 'signup' }
   | { name: 'admin-login' }
+  | { name: 'concierge' }
   | { name: 'legal'; kind: 'terms' | 'privacy' | 'disclaimer' | 'about' | 'press' | 'contact' };
 
 function parseHash(): Route {
@@ -41,6 +42,7 @@ function parseHash(): Route {
   if (h === 'login') return { name: 'login' };
   if (h === 'signup') return { name: 'signup' };
   if (h === 'admin-login') return { name: 'admin-login' };
+  if (h === 'concierge') return { name: 'concierge' };
   if (['terms', 'privacy', 'disclaimer', 'about', 'press', 'contact'].includes(h))
     return { name: 'legal', kind: h as any };
   if (h.startsWith('p/')) return { name: 'product', slug: h.slice(2) };
@@ -69,6 +71,10 @@ export default function App() {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
+
+  useEffect(() => {
+    if (route.name === 'concierge') setConcierge(true);
+  }, [route.name]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -120,7 +126,7 @@ export default function App() {
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             className="flex-1"
           >
-            {route.name === 'home' && (
+            {(route.name === 'home' || route.name === 'concierge') && (
               <Home
                 onOpenProduct={openProduct}
                 onPreview={setPreviewing}

@@ -29,6 +29,21 @@ from backend.shared.security import Principal, current_user
 router = APIRouter(tags=["chats"])
 
 
+def _can_access_chat(chat: Chat, user: Principal) -> bool:
+    if user.role == "admin":
+        return True
+    return user.id in (chat.buyer_id, chat.seller_id)
+
+
+async def _require_chat(chat_id: str, user: Principal, db: AsyncSession) -> Chat:
+    chat = await db.get(Chat, chat_id)
+    if not chat:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat not found")
+    if not _can_access_chat(chat, user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Forbidden")
+    return chat
+
+
 async def _thread_out(db: AsyncSession, c: Chat) -> ThreadOut:
     listing = await db.get(Listing, c.listing_id)
     buyer = await db.get(User, c.buyer_id)
@@ -58,7 +73,9 @@ async def list_chats(user: Principal = Depends(current_user),
 
 
 @router.get("/chats/{chat_id}/messages", response_model=list[MessageOut])
-async def messages(chat_id: str, db: AsyncSession = Depends(get_session)) -> list[MessageOut]:
+async def messages(chat_id: str, user: Principal = Depends(current_user),
+                   db: AsyncSession = Depends(get_session)) -> list[MessageOut]:
+    await _require_chat(chat_id, user, db)
     rows = (await db.execute(
         select(ChatMessage).where(ChatMessage.chat_id == chat_id)
         .order_by(ChatMessage.created_at))).scalars().all()
@@ -71,9 +88,7 @@ async def messages(chat_id: str, db: AsyncSession = Depends(get_session)) -> lis
 async def send_message(chat_id: str, body: SendMessageIn,
                        user: Principal = Depends(current_user),
                        db: AsyncSession = Depends(get_session)) -> MessageOut:
-    chat = await db.get(Chat, chat_id)
-    if not chat:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat not found")
+    chat = await _require_chat(chat_id, user, db)
     sender = await db.get(User, user.id)
     msg = ChatMessage(chat_id=chat_id, sender_id=user.id,
                       sender_name=sender.display_name if sender else "",

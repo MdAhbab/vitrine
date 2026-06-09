@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, X, ArrowRight, Send } from 'lucide-react';
-import { PRODUCTS, type Product } from '../lib/mockData';
+import { toast } from 'sonner';
+import { type Product } from '../lib/mockData';
+import { conciergeStream, USE_MOCKS } from '../lib/api';
+import { useCatalogProducts } from '../lib/store';
 
 type Msg =
   | { role: 'user'; text: string }
@@ -15,6 +18,7 @@ const SUGGESTIONS = [
 ];
 
 export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean; onClose: () => void; onOpenProduct: (slug: string) => void }) {
+  const products = useCatalogProducts();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -24,12 +28,7 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, streaming]);
 
-  async function send(q: string) {
-    if (!q.trim() || streaming) return;
-    setMessages((m) => [...m, { role: 'user', text: q }]);
-    setInput('');
-    setStreaming(true);
-
+  async function sendMock(q: string) {
     const tokens = [
       'Considering ', 'your ', 'constraints ', '— ', 'I ', 'looked ', 'across ', 'the ', 'gallery ',
       'and ', 'filtered ', 'by ', 'demo ', 'health, ', 'price, ', 'and ', 'UI ', 'craft. ',
@@ -47,20 +46,99 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
       });
     }
     const lower = q.toLowerCase();
-    const results = PRODUCTS
+    const results = products
       .filter((p) =>
         p.tags.some((t) => lower.includes(t)) ||
         lower.includes(p.category.toLowerCase()) ||
         p.name.toLowerCase().includes(lower.split(' ')[0])
       )
       .slice(0, 3);
-    const final = results.length ? results : PRODUCTS.slice(0, 3);
+    const final = results.length ? results : products.slice(0, 3);
     setMessages((m) => {
       const next = [...m];
       next[next.length - 1] = { role: 'assistant', text: acc, results: final };
       return next;
     });
-    setStreaming(false);
+  }
+
+  async function sendLive(q: string) {
+    let acc = '';
+    let resultSlugs: Product[] = [];
+    setMessages((m) => [...m, { role: 'assistant', text: '' }]);
+
+    await conciergeStream(q, (chunk) => {
+      if (chunk.type === 'token' && chunk.text) {
+        acc += chunk.text;
+        setMessages((m) => {
+          const next = [...m];
+          next[next.length - 1] = { role: 'assistant', text: acc };
+          return next;
+        });
+      }
+      if (chunk.type === 'results' && chunk.results) {
+        resultSlugs = chunk.results.map((r: { slug: string; name: string; tagline: string; price: number; vitrineScore: number }) => {
+          const full = products.find((p) => p.slug === r.slug || p.id === r.id);
+          return full ?? {
+            id: r.id || r.slug,
+            slug: r.slug,
+            name: r.name,
+            tagline: r.tagline,
+            price: r.price,
+            vitrineScore: r.vitrineScore,
+            cover: '',
+            category: '',
+            tags: [],
+            seller: { name: '', handle: '', verified: false },
+            scoreBreakdown: [],
+            demoUrl: '',
+            demoHealth: 'live' as const,
+            badges: [],
+            screenshots: [],
+            ratingDistribution: [],
+            rating: 0,
+            reviewsCount: 0,
+            description: '',
+            spec: [],
+            framework: '',
+            license: 'MIT' as const,
+            hasLiveDemo: false,
+            createdAt: '',
+            sdlc: { problem: '', solution: '', methodology: '', discussions: '' },
+            businessModel: { kind: 'for-profit' as const, pitch: '', revenueStreams: [] },
+            techStack: [],
+          };
+        });
+      }
+      if (chunk.type === 'done') {
+        setMessages((m) => {
+          const next = [...m];
+          const last = next[next.length - 1];
+          if (last.role === 'assistant') {
+            next[next.length - 1] = { ...last, results: resultSlugs.length ? resultSlugs : products.slice(0, 3) };
+          }
+          return next;
+        });
+      }
+    });
+  }
+
+  async function send(q: string) {
+    if (!q.trim() || streaming) return;
+    setMessages((m) => [...m, { role: 'user', text: q }]);
+    setInput('');
+    setStreaming(true);
+    try {
+      if (USE_MOCKS) {
+        await sendMock(q);
+      } else {
+        await sendLive(q);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Concierge unavailable');
+      setMessages((m) => [...m, { role: 'assistant', text: 'Sorry — I could not reach the concierge service. Try again shortly.' }]);
+    } finally {
+      setStreaming(false);
+    }
   }
 
   return (

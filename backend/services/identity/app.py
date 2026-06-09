@@ -22,6 +22,7 @@ from backend.shared.security import (
     make_refresh_token,
     verify_password,
     decode_token,
+    auth_rate_limit,
 )
 
 router = APIRouter(tags=["identity"])
@@ -41,7 +42,7 @@ async def _issue(u: User) -> TokenOut:
     )
 
 
-@router.post("/auth/signup", response_model=TokenOut)
+@router.post("/auth/signup", response_model=TokenOut, dependencies=[Depends(auth_rate_limit)])
 async def signup(body: SignupIn, db: AsyncSession = Depends(get_session)) -> TokenOut:
     if body.role not in ("buyer", "seller"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "role must be buyer or seller")
@@ -59,7 +60,7 @@ async def signup(body: SignupIn, db: AsyncSession = Depends(get_session)) -> Tok
     return await _issue(u)
 
 
-@router.post("/auth/login", response_model=TokenOut)
+@router.post("/auth/login", response_model=TokenOut, dependencies=[Depends(auth_rate_limit)])
 async def login(body: LoginIn, db: AsyncSession = Depends(get_session)) -> TokenOut:
     u = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
     if not u or not verify_password(body.password, u.password_hash):
@@ -67,7 +68,7 @@ async def login(body: LoginIn, db: AsyncSession = Depends(get_session)) -> Token
     return await _issue(u)
 
 
-@router.post("/auth/admin/login", response_model=TokenOut)
+@router.post("/auth/admin/login", response_model=TokenOut, dependencies=[Depends(auth_rate_limit)])
 async def admin_login(body: LoginIn, db: AsyncSession = Depends(get_session)) -> TokenOut:
     u = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
     if not u or u.role != "admin" or not verify_password(body.password, u.password_hash):
@@ -75,7 +76,7 @@ async def admin_login(body: LoginIn, db: AsyncSession = Depends(get_session)) ->
     return await _issue(u)
 
 
-@router.post("/auth/refresh", response_model=TokenOut)
+@router.post("/auth/refresh", response_model=TokenOut, dependencies=[Depends(auth_rate_limit)])
 async def refresh(body: RefreshIn, db: AsyncSession = Depends(get_session)) -> TokenOut:
     claims = decode_token(body.refresh_token)
     if claims.get("kind") != "refresh":

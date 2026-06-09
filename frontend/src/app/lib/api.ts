@@ -61,6 +61,8 @@ export const api = {
   listing: (slug: string) => req<any>(`/listings/${slug}`),
   createListing: (b: any) => req<any>('/listings', { method: 'POST', body: JSON.stringify(b) }),
   intake: (id: string, b: any) => req<any>(`/listings/${id}/intake`, { method: 'POST', body: JSON.stringify(b) }),
+  aiIntake: (id: string, b: any) => req<any>(`/ai/intake?listing_id=${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify(b) }),
+  submitListing: (id: string) => req<any>(`/listings/${id}/submit`, { method: 'POST' }),
   updateListing: (id: string, b: any) => req<any>(`/listings/${id}`, { method: 'PATCH', body: JSON.stringify(b) }),
   deleteListing: (id: string) => req<any>(`/listings/${id}`, { method: 'DELETE' }),
 

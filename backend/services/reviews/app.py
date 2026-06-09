@@ -55,7 +55,13 @@ async def create_review(body: dict, user: Principal = Depends(current_user),
     verified_purchase = len(orders) > 0
     if not verified_purchase:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only verified buyers can leave a review")
-        
+
+    existing = (await db.execute(
+        select(Review).where(Review.buyer_id == user.id, Review.listing_id == listing_id)
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status.HTTP_409_CONFLICT, "You have already reviewed this listing")
+
     rev = Review(
         listing_id=listing_id,
         buyer_id=user.id,

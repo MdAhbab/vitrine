@@ -1,30 +1,111 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Github, ArrowRight, Check, Sparkles, Upload, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { SpecSheet } from '../components/SpecSheet';
-import { PRODUCTS } from '../lib/mockData';
+import { PRODUCTS, type Product, type SpecSection } from '../lib/mockData';
+import { api, USE_MOCKS } from '../lib/api';
+import { useStore } from '../lib/store';
 
 const STEPS = ['Import', 'Review spec', 'Preview & media', 'Price & pitch', 'Submit'];
 
+function repoName(url: string): string {
+  const m = url.match(/github\.com\/[\w.-]+\/([\w.-]+)/i);
+  return m ? m[1].replace(/\.git$/, '') : url.split('/').filter(Boolean).pop() || 'New Listing';
+}
+
 export function Sell({ onDone }: { onDone: () => void }) {
+  const { user } = useStore();
   const [step, setStep] = useState(0);
   const [url, setUrl] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [listingId, setListingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Partial<Product>>({});
+  const [spec, setSpec] = useState<SpecSection[]>(PRODUCTS[0].spec);
+  const [demoUrl, setDemoUrl] = useState('https://your-app.vercel.app');
+  const [tagline, setTagline] = useState('');
+  const [price, setPrice] = useState(89);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!analyzing) return;
+    if (!analyzing || !USE_MOCKS) return;
     let i = 0;
     const t = setInterval(() => {
       i += 6 + Math.random() * 8;
       setProgress(Math.min(100, i));
       if (i >= 100) {
         clearInterval(t);
-        setTimeout(() => { setAnalyzing(false); setStep(1); }, 350);
+        setTimeout(() => { setAnalyzing(false); setStep(1); setSpec(PRODUCTS[0].spec); }, 350);
       }
     }, 180);
     return () => clearInterval(t);
   }, [analyzing]);
+
+  const runIntake = async () => {
+    if (!url.trim()) return;
+    if (!USE_MOCKS && (!user || user.role === 'buyer')) {
+      toast.error('Sign in as a seller to list a piece');
+      return;
+    }
+    setAnalyzing(true);
+    setProgress(0);
+
+    if (USE_MOCKS) return;
+
+    try {
+      const name = repoName(url.trim());
+      const created = await api.createListing({ name, category: 'Web App', tagline: '', price: 0 });
+      setListingId(created.id);
+      setDraft(created);
+      setTagline(created.tagline || '');
+      setPrice(created.price || 89);
+
+      const timer = setInterval(() => setProgress((p) => Math.min(95, p + 8)), 400);
+      await api.aiIntake(created.id, { repo_url: url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}` });
+      clearInterval(timer);
+      setProgress(100);
+
+      const updated = await api.listing(created.slug);
+      setDraft(updated);
+      setSpec(updated.spec?.length ? updated.spec : []);
+      setTagline(updated.tagline || tagline);
+      setPrice(updated.price || price);
+      setStep(1);
+      toast.success('Agent drafted your spec sheet');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Intake failed');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (USE_MOCKS) {
+      setStep(4);
+      return;
+    }
+    if (!listingId) {
+      toast.error('No listing to submit');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.updateListing(listingId, {
+        tagline,
+        price,
+        demo_url: demoUrl,
+        description: draft.description || tagline,
+      });
+      await api.submitListing(listingId);
+      setStep(4);
+      toast.success('Listing submitted for curator review');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Submit failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <main className="max-w-[1100px] mx-auto px-6 lg:px-10 pt-12 pb-24">
@@ -75,7 +156,7 @@ export function Sell({ onDone }: { onDone: () => void }) {
                     className="flex-1 bg-transparent outline-none text-sm py-2"
                   />
                   <button
-                    onClick={() => setAnalyzing(true)}
+                    onClick={runIntake}
                     disabled={!url.trim() || analyzing}
                     className="bg-text text-bg rounded-lg px-4 h-9 text-sm font-medium disabled:opacity-30 inline-flex items-center gap-1.5"
                   >
@@ -120,7 +201,7 @@ export function Sell({ onDone }: { onDone: () => void }) {
                     <p className="text-text-muted mt-2 text-sm flex items-center gap-1.5"><Sparkles size={13} className="text-accent" /> Fields marked auto were drafted by the agent — confirm or edit before submitting.</p>
                   </div>
                 </div>
-                <SpecSheet sections={PRODUCTS[0].spec} />
+                <SpecSheet sections={spec.length ? spec : PRODUCTS[0].spec} />
               </div>
             )}
 
@@ -130,14 +211,14 @@ export function Sell({ onDone }: { onDone: () => void }) {
                 <div>
                   <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Live demo URL</label>
                   <div className="mt-2 hairline rounded-xl bg-bg flex items-center gap-2 p-2">
-                    <input defaultValue="https://your-app.vercel.app" className="flex-1 bg-transparent outline-none text-sm py-2 px-2 font-mono" />
+                    <input value={demoUrl} onChange={(e) => setDemoUrl(e.target.value)} className="flex-1 bg-transparent outline-none text-sm py-2 px-2 font-mono" />
                     <span className="flex items-center gap-1.5 px-3 font-mono text-[10px] uppercase tracking-wider text-success"><span className="live-dot" /> healthy</span>
                   </div>
                 </div>
                 <div>
                   <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Screenshots</label>
                   <div className="grid grid-cols-3 gap-3 mt-2">
-                    {PRODUCTS[0].screenshots.slice(0,3).map((s, i) => (
+                    {(draft.screenshots || PRODUCTS[0].screenshots).slice(0, 3).map((s, i) => (
                       <div key={i} className="aspect-[4/3] rounded-xl overflow-hidden hairline">
                         <img src={s} alt="" className="w-full h-full object-cover" />
                       </div>
@@ -153,9 +234,9 @@ export function Sell({ onDone }: { onDone: () => void }) {
                 <p className="text-text-muted text-sm flex items-center gap-1.5"><Sparkles size={13} className="text-accent" /> Pricing & Pitch Agent suggested these tiers based on comparable pieces.</p>
                 <div className="grid sm:grid-cols-3 gap-3">
                   {[
-                    { name: 'Source', price: 89, note: 'Just the code' },
-                    { name: 'Source + Setup', price: 169, note: 'Recommended', rec: true },
-                    { name: 'Bespoke', price: 369, note: 'White-glove' },
+                    { name: 'Source', price: price, note: 'Just the code' },
+                    { name: 'Source + Setup', price: price + 80, note: 'Recommended', rec: true },
+                    { name: 'Bespoke', price: price + 280, note: 'White-glove' },
                   ].map((t) => (
                     <div key={t.name} className={`hairline rounded-xl p-4 ${t.rec ? 'border-accent bg-surface-2/40' : ''}`}>
                       <div className="font-serif text-lg">{t.name}</div>
@@ -167,7 +248,9 @@ export function Sell({ onDone }: { onDone: () => void }) {
                 <div>
                   <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Drafted tagline</label>
                   <input
-                    defaultValue="A quiet operations cockpit, framed for the long haul."
+                    value={tagline}
+                    onChange={(e) => setTagline(e.target.value)}
+                    placeholder="A quiet operations cockpit, framed for the long haul."
                     className="mt-2 w-full hairline rounded-xl bg-bg px-4 h-11 text-sm font-serif"
                   />
                 </div>
@@ -196,10 +279,11 @@ export function Sell({ onDone }: { onDone: () => void }) {
           <div className="flex items-center justify-between mt-10 pt-6 border-t">
             <button onClick={() => setStep((s) => Math.max(0, s - 1))} className="text-sm text-text-muted hover:text-text">← Back</button>
             <button
-              onClick={() => setStep((s) => Math.min(4, s + 1))}
-              className="bg-text text-bg rounded-full px-5 h-10 text-sm font-medium inline-flex items-center gap-1.5"
+              onClick={() => step === 3 ? handleSubmit() : setStep((s) => Math.min(4, s + 1))}
+              disabled={submitting}
+              className="bg-text text-bg rounded-full px-5 h-10 text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
             >
-              {step === 3 ? 'Submit listing' : 'Continue'} <ArrowRight size={13} />
+              {step === 3 ? (submitting ? 'Submitting…' : 'Submit listing') : 'Continue'} <ArrowRight size={13} />
             </button>
           </div>
         )}

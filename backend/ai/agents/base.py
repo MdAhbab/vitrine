@@ -14,18 +14,35 @@ from backend.shared.cache import cache, content_hash
 from backend.shared.db import SessionLocal
 from backend.shared.models import AgentRun
 
-from ..budget import budget
+from ..budget import BudgetExceeded, budget
 from ..client import LLMResult, client
 
 _AGENTS_MD = Path(__file__).resolve().parents[3] / "AGENTS.md"
 
 
-def system_prompt_for(section_title: str, fallback: str = "") -> str:
-    """Extract an agent's section from AGENTS.md to use as its system prompt.
+_PROMPT_KEY_MAP = {
+    "Repo-Intake Agent": "repoIntake",
+    "Listing Verification Agent": "verification",
+    "Buyer Concierge Agent": "concierge",
+    "Pricing & Pitch Agent": "pricing",
+    "Buyer Representative Agent": "buyerRep",
+    "Feature Cost Estimator Agent": "featureEstimator",
+    "Curation & Ranking Agent": "curation",
+}
 
-    Lets the curator edit behaviour by editing AGENTS.md (and, at runtime, the
-    admin_configs.system_prompts override — see AGENTS.md principle #8).
-    """
+_AGENT_SECTION = {
+    "repo_intake": "Repo-Intake Agent",
+    "verification": "Listing Verification Agent",
+    "concierge": "Buyer Concierge Agent",
+    "pricing": "Pricing & Pitch Agent",
+    "negotiator": "Buyer Representative Agent",
+    "feature_estimator": "Feature Cost Estimator Agent",
+    "curation": "Curation & Ranking Agent",
+}
+
+
+def system_prompt_for(section_title: str, fallback: str = "") -> str:
+    """Extract an agent's section from AGENTS.md (file fallback at import time)."""
     try:
         text = _AGENTS_MD.read_text()
     except OSError:
@@ -34,15 +51,50 @@ def system_prompt_for(section_title: str, fallback: str = "") -> str:
     return (m.group(0).strip() if m else fallback) or fallback
 
 
+async def resolve_system_prompt(agent: str, system: str) -> str:
+    """Apply admin_configs.system_prompts override at runtime (AGENTS.md §8)."""
+    title = _AGENT_SECTION.get(agent)
+    if not title:
+        return system
+    key = _PROMPT_KEY_MAP.get(title)
+    if not key:
+        return system
+    try:
+        from backend.shared.models import AdminConfig
+        async with SessionLocal() as db:
+            row = await db.get(AdminConfig, "system_prompts")
+            if row and isinstance(row.value, dict):
+                val = row.value.get(key, "")
+                if val and str(val).strip():
+                    return str(val).strip()
+    except Exception:
+        pass
+    return system
+
+
 async def run_agent(agent: str, system: str, user_msg: str, *,
                      listing_id: str | None = None, trigger: str = "api",
                      tools: list | None = None) -> LLMResult:
+    system = await resolve_system_prompt(agent, system)
     key = f"agent:{agent}:{content_hash(system, user_msg)}"
     if cached := await cache.get(key):
         return LLMResult(**cached)
 
-    budget.check()
-    
+    try:
+        budget.check()
+    except BudgetExceeded:
+        degraded = LLMResult(
+            text="[Budget exceeded — heuristic-only mode. Needs human review.]",
+            stub=True,
+            model="budget-cap",
+        )
+        async with SessionLocal() as db:
+            db.add(AgentRun(agent=agent, listing_id=listing_id, trigger_event=trigger,
+                            input_hash=key, model="budget-cap", tokens_in=0,
+                            tokens_out=0, cost_usd=0.0, status="degraded"))
+            await db.commit()
+        return degraded
+
     openai_tools = None
     if tools:
         from ..tools import REGISTRY

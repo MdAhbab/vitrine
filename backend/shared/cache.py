@@ -2,8 +2,6 @@
 Cache + AI result cache (content-hash keyed).
 
 'memory' (default): in-process dict with TTL. 'redis': Redis GET/SETEX.
-Used by the AI orchestrator to make identical agent runs cost $0 (see AGENTS.md
-principle #4) and for general short-TTL caching.
 """
 from __future__ import annotations
 
@@ -39,15 +37,30 @@ class _MemoryCache:
 
 
 class _RedisCache:
-    """TODO(Phase 2): Redis-backed cache (redis.asyncio)."""
-
     def __init__(self) -> None:
-        raise NotImplementedError("Redis cache not implemented — set CACHE=memory.")
+        self._redis = None
+
+    async def _client(self):
+        if self._redis is None:
+            import redis.asyncio as aioredis
+            self._redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        return self._redis
+
+    async def get(self, key: str) -> Any | None:
+        r = await self._client()
+        raw = await r.get(f"cache:{key}")
+        if not raw:
+            return None
+        return json.loads(raw)
+
+    async def set(self, key: str, value: Any, ttl: int = 3600) -> None:
+        r = await self._client()
+        await r.setex(f"cache:{key}", ttl or 3600, json.dumps(value, default=str))
 
 
-def get_cache() -> _MemoryCache:
+def get_cache() -> _MemoryCache | _RedisCache:
     if settings.CACHE == "redis":
-        return _RedisCache()  # type: ignore[return-value]
+        return _RedisCache()
     return _MemoryCache()
 
 

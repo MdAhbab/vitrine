@@ -11,10 +11,12 @@ from backend.ai.vectorstore import vector_store
 from backend.shared.settings import settings
 
 from ..client import client
-from .base import system_prompt_for
+from .base import resolve_system_prompt, system_prompt_for
 
-SYSTEM = system_prompt_for("Buyer Concierge Agent",
-                           "Help buyers find software in the catalog. Never invent products.")
+_SYSTEM_FALLBACK = system_prompt_for(
+    "Buyer Concierge Agent",
+    "Help buyers find software in the catalog. Never invent products.",
+)
 
 
 async def _candidates(query: str, k: int = 4) -> list[Listing]:
@@ -50,13 +52,14 @@ async def stream(query: str, history: list[dict] | None = None) -> AsyncIterator
     msg = (f"You are the Concierge. Query: {query!r}. "
            f"Recommend from: {[r.name for r in rows]} with one-line reasons.")
     
-    messages = [{"role": "system", "content": SYSTEM}]
+    system = await resolve_system_prompt("concierge", _SYSTEM_FALLBACK)
+    messages = [{"role": "system", "content": system}]
     if history:
         for h in history:
             messages.append({"role": h.get("role", "user"), "content": h.get("content", "")})
     messages.append({"role": "user", "content": msg})
 
-    if not client.enabled:
+    if not await client._ensure_client():
         stub_res = client._stub(messages, settings.OPENAI_MODEL)
         for word in stub_res.text.split(" "):
             yield {"type": "token", "text": word + " "}

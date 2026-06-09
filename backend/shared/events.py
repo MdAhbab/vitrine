@@ -2,20 +2,13 @@
 EventBus — the async event spine.
 
 Two backends, chosen by settings.EVENT_BUS:
-  * 'memory' (default): in-process asyncio pub/sub. Zero dependencies — perfect
-    for SQLite-only local dev where all services run in ONE process (the
-    gateway monolith). Events do NOT cross process boundaries.
+  * 'memory' (default): in-process asyncio pub/sub.
   * 'redis': Redis Streams + consumer groups (at-least-once, multi-process).
-    Use this once services run as separate processes / on the VM.
-
-Envelope mirrors backend.md §3. Handlers are `async def handler(event: dict)`.
-
-NOTE (scaffold): the memory bus is functional; the redis bus is a thin stub
-to be completed in Phase 2 (see backend.md step-by-step).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -25,6 +18,8 @@ from typing import Any
 from .settings import settings
 
 Handler = Callable[[dict], Awaitable[None]]
+STREAM = "vitrine:events"
+GROUP = "vitrine-workers"
 
 
 def make_event(type_: str, payload: dict, *, actor: str = "system",
@@ -48,7 +43,6 @@ class _MemoryBus:
 
     async def publish(self, type_: str, payload: dict, **kw) -> None:
         event = make_event(type_, payload, **kw)
-        # match exact topic and wildcard prefix subscribers (e.g. 'listing.*')
         handlers: list[Handler] = list(self._subs.get(type_, []))
         prefix = type_.split(".", 1)[0] + ".*"
         handlers += self._subs.get(prefix, [])
@@ -56,30 +50,85 @@ class _MemoryBus:
             asyncio.create_task(_safe(h, event))
 
 
+class _RedisBus:
+    def __init__(self) -> None:
+        self._subs: dict[str, list[Handler]] = defaultdict(list)
+        self._redis = None
+        self._consumer_task: asyncio.Task | None = None
+        self._seen: set[str] = set()
+
+    def subscribe(self, topic: str, handler: Handler) -> None:
+        self._subs[topic].append(handler)
+
+    async def _client(self):
+        if self._redis is None:
+            import redis.asyncio as aioredis
+            self._redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            try:
+                await self._redis.xgroup_create(STREAM, GROUP, id="0", mkstream=True)
+            except Exception:
+                pass
+        return self._redis
+
+    def _handlers_for(self, type_: str) -> list[Handler]:
+        handlers = list(self._subs.get(type_, []))
+        prefix = type_.split(".", 1)[0] + ".*"
+        handlers += self._subs.get(prefix, [])
+        return handlers
+
+    async def publish(self, type_: str, payload: dict, **kw) -> None:
+        event = make_event(type_, payload, **kw)
+        r = await self._client()
+        await r.xadd(STREAM, {"data": json.dumps(event)})
+        for h in self._handlers_for(type_):
+            asyncio.create_task(_safe(h, event))
+
+    async def start_consumer(self) -> None:
+        if self._consumer_task:
+            return
+        self._consumer_task = asyncio.create_task(self._consume_loop())
+
+    async def _consume_loop(self) -> None:
+        r = await self._client()
+        consumer = f"worker-{uuid.uuid4().hex[:8]}"
+        while True:
+            try:
+                rows = await r.xreadgroup(GROUP, consumer, {STREAM: ">"}, count=10, block=2000)
+                if not rows:
+                    continue
+                for _stream, messages in rows:
+                    for msg_id, fields in messages:
+                        try:
+                            event = json.loads(fields["data"])
+                            idem = event.get("idempotency_key", msg_id)
+                            if idem in self._seen:
+                                await r.xack(STREAM, GROUP, msg_id)
+                                continue
+                            self._seen.add(idem)
+                            if len(self._seen) > 10_000:
+                                self._seen.clear()
+                            for h in self._handlers_for(event["type"]):
+                                await _safe(h, event)
+                            await r.xack(STREAM, GROUP, msg_id)
+                        except Exception as exc:
+                            print(f"[eventbus] redis consumer error: {exc}")
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                print(f"[eventbus] redis loop error: {exc}")
+                await asyncio.sleep(1)
+
+
 async def _safe(handler: Handler, event: dict) -> None:
     try:
         await handler(event)
-    except Exception as exc:  # noqa: BLE001 — never let one handler kill the bus
+    except Exception as exc:
         print(f"[eventbus] handler error on {event['type']}: {exc}")
 
 
-class _RedisBus:
-    """TODO(Phase 2): Redis Streams implementation.
-
-    publish -> XADD stream <type>. subscribe -> XREADGROUP consumer loop with
-    acks, idempotency dedupe on idempotency_key, and a dead-letter after
-    MAX_DELIVERIES. See backend.md §3.
-    """
-
-    def __init__(self) -> None:
-        raise NotImplementedError(
-            "Redis EventBus not implemented yet — set EVENT_BUS=memory for now."
-        )
-
-
-def get_bus() -> _MemoryBus:
+def get_bus() -> _MemoryBus | _RedisBus:
     if settings.EVENT_BUS == "redis":
-        return _RedisBus()  # type: ignore[return-value]
+        return _RedisBus()
     return _MemoryBus()
 
 

@@ -63,10 +63,16 @@ async def list_listings(
 
 
 @router.get("/listings/{slug}", response_model=ProductOut)
-async def get_listing(slug: str, db: AsyncSession = Depends(get_session)) -> ProductOut:
+async def get_listing(slug: str, db: AsyncSession = Depends(get_session),
+                      user: Principal | None = Depends(optional_user)) -> ProductOut:
     listing = (await db.execute(select(Listing).where(Listing.slug == slug))).scalar_one_or_none()
     if not listing:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
+    if listing.status != "live":
+        is_owner = user and listing.owner_id == user.id
+        is_admin = user and user.role == "admin"
+        if not is_owner and not is_admin:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
     return await _load(db, listing)
 
 
@@ -92,7 +98,13 @@ async def create_listing(
 async def trigger_intake(
     listing_id: str, body: IntakeIn,
     user: Principal = Depends(require_role("seller", "admin")),
+    db: AsyncSession = Depends(get_session),
 ) -> dict:
+    listing = await db.get(Listing, listing_id)
+    if not listing:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
+    if listing.owner_id != user.id and user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Forbidden")
     # Publishing the event lets the Repo-Intake agent fill the form sheet async.
     await bus.publish(
         "listing.created",
@@ -145,12 +157,31 @@ async def update_listing(listing_id: str, patch: dict,
         listing.ai_draft = patch["ai_draft"]
     if "aiDraft" in patch:
         listing.ai_draft = patch["aiDraft"]
+    if "demo_url" in patch:
+        listing.demo_url = patch["demo_url"]
+    if "demoUrl" in patch:
+        listing.demo_url = patch["demoUrl"]
         
     await db.commit()
     await db.refresh(listing)
     
     await bus.publish("listing.updated", {"listing_id": listing.id}, actor=f"user:{user.id}")
     return await _load(db, listing)
+
+
+@router.post("/listings/{listing_id}/submit")
+async def submit_listing(listing_id: str,
+                         user: Principal = Depends(require_role("seller", "admin")),
+                         db: AsyncSession = Depends(get_session)) -> dict:
+    listing = await db.get(Listing, listing_id)
+    if not listing:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
+    if listing.owner_id != user.id and user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Forbidden")
+    listing.status = "review"
+    db.add(listing)
+    await db.commit()
+    return {"id": listing.id, "status": listing.status}
 
 
 @router.delete("/listings/{listing_id}", status_code=204)
