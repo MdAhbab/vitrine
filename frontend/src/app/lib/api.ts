@@ -1,5 +1,10 @@
 // frontend/src/app/lib/api.ts — drop-in integration layer
-const BASE = import.meta.env.VITE_API_BASE ?? '/api';
+const CONFIGURED_BASE = import.meta.env.VITE_API_BASE ?? '/api';
+const DEV_DIRECT_BASE = import.meta.env.VITE_DIRECT_API_BASE ?? 'http://127.0.0.1:8000';
+const BASES = Array.from(new Set([
+  CONFIGURED_BASE,
+  ...(import.meta.env.DEV ? ['/api', DEV_DIRECT_BASE] : []),
+].filter(Boolean)));
 export const USE_MOCKS = (import.meta.env.VITE_USE_MOCKS ?? 'false') === 'true';
 
 const tok = {
@@ -15,8 +20,18 @@ const tok = {
   },
 };
 
-async function req<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+function apiUrl(base: string, path: string) {
+  return `${base.replace(/\/$/, '')}${path}`;
+}
+
+function canTryNextBase(error: unknown) {
+  if (error instanceof TypeError) return true;
+  if (!(error instanceof Error)) return false;
+  return error.message.startsWith('404 ') || error.message.includes('Failed to fetch');
+}
+
+async function reqFromBase<T>(base: string, path: string, init: RequestInit, retry: boolean): Promise<T> {
+  const res = await fetch(apiUrl(base, path), {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -26,7 +41,7 @@ async function req<T>(path: string, init: RequestInit = {}, retry = true): Promi
   });
   if (res.status === 401 && retry && tok.refresh) {
     try {
-      const refreshRes = await fetch(`${BASE}/auth/refresh`, {
+      const refreshRes = await fetch(apiUrl(base, '/auth/refresh'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: tok.refresh }),
@@ -44,6 +59,19 @@ async function req<T>(path: string, init: RequestInit = {}, retry = true): Promi
   }
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.status === 204 ? (undefined as T) : res.json();
+}
+
+async function req<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
+  let lastError: unknown;
+  for (const base of BASES) {
+    try {
+      return await reqFromBase<T>(base, path, init, retry);
+    } catch (e) {
+      lastError = e;
+      if (!canTryNextBase(e)) break;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Request failed');
 }
 
 export const api = {
@@ -107,36 +135,46 @@ export const api = {
 
 // Concierge SSE (POST + stream). Use fetch + ReadableStream reader.
 export async function conciergeStream(query: string, onChunk: (c: any) => void) {
-  const res = await fetch(`${BASE}/ai/concierge`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(tok.access ? { Authorization: `Bearer ${tok.access}` } : {}),
-    },
-    body: JSON.stringify({ query, history: [] }),
-  });
-  if (!res.ok || !res.body) {
-    throw new Error(`Failed to initialize stream: ${res.status}`);
-  }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n\n');
-    for (let i = 0; i < lines.length - 1; i++) {
-      const line = lines[i];
-      const m = line.match(/^data: (.*)$/m);
-      if (m) {
-        try {
-          onChunk(JSON.parse(m[1]));
-        } catch (e) {
-          // parse error
-        }
+  let lastError: unknown;
+  for (const base of BASES) {
+    try {
+      const res = await fetch(apiUrl(base, '/ai/concierge'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(tok.access ? { Authorization: `Bearer ${tok.access}` } : {}),
+        },
+        body: JSON.stringify({ query, history: [] }),
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`${res.status} ${await res.text()}`);
       }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n\n');
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i];
+          const m = line.match(/^data: (.*)$/m);
+          if (m) {
+            try {
+              onChunk(JSON.parse(m[1]));
+            } catch (e) {
+              // ignore malformed stream fragments
+            }
+          }
+        }
+        buf = lines[lines.length - 1];
+      }
+      return;
+    } catch (e) {
+      lastError = e;
+      if (!canTryNextBase(e)) break;
     }
-    buf = lines[lines.length - 1];
   }
+  throw lastError instanceof Error ? lastError : new Error('Failed to initialize stream');
 }

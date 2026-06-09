@@ -108,6 +108,18 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
             techStack: [],
           };
         });
+        setMessages((m) => {
+          const next = [...m];
+          const last = next[next.length - 1];
+          if (last.role === 'assistant') {
+            next[next.length - 1] = {
+              ...last,
+              text: last.text || 'I found live matches in the catalog.',
+              results: resultSlugs,
+            };
+          }
+          return next;
+        });
       }
       if (chunk.type === 'done') {
         setMessages((m) => {
