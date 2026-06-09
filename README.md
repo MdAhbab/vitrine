@@ -61,16 +61,24 @@ Three things make it different:
 2. **Agentic publishing.** A fleet of OpenAI agents reads the repo/README, fills the technical form, verifies the submission, ranks it, and helps the seller price & pitch it.
 3. **Boutique, premium experience.** A gallery, not a flea market — curated sections, editorial layout, dark/light, slow elegant motion. (See [frontend.md](./frontend.md).)
 
-### The commercial model (how Vitrine makes money)
-- **Preview hosting fees** — charged by hosting *duration* + deployment/infra-management fee when a developer wants Vitrine to host the demo (or the full app) instead of using their own Vercel link.
-- **Marketplace take rate** — a percentage of each sale / advance payment.
-- **Promotion slots** — featured placement; **discounted for Bangladeshi students** (Local Problem Solving category).
-- **Pro seller tools** — AI Pricing & Pitch, analytics, and managed deployment as a subscription.
+### The commercial & business model (seller tiers & commissions)
+Vitrine supports high-value listings (up to **$15,000+** for complex software/complete websites) and operates on a tiered seller subscription and platform commission model:
+- **Free Tier**: 
+  - Max **2 active software listings** at a time.
+  - Platform takes a **10% commission** on all sales.
+  - Basic analytics and standard verification queuing.
+- **Monthly Subscriber (Pro Tier)**: 
+  - **Unlimited listings**.
+  - **0% platform commission** on sales (standard transaction processing fees apply).
+  - Premium analytics, priority verification, and advanced AI agent features.
+- **Student Seller Program**:
+  - Eligible students (verified via academic email/credentials) receive **25% off** monthly subscription fees and single post promotions.
+  - Non-subscribed students still get a reduced commission rate of **7.5%** instead of 10%.
 
 ### The "demo-then-deliver" sales flow
 1. Developer lists a product with **only a demo frontend** (preview link) + the AI-filled spec.
-2. A buyer **purchases or pays an advance**.
-3. The **Notification service** alerts the developer.
+2. A buyer **purchases, pays an advance, or requests custom features** (using the AI Cost Estimator to price add-ons).
+3. The **Notification service** alerts the developer and initiates a direct messaging channel.
 4. The developer **delivers** the full app / upgraded / customized build to the buyer (via Vitrine's secure delivery + license flow).
 
 ---
@@ -78,65 +86,73 @@ Three things make it different:
 ## 3. Core User Journeys
 
 ### A) Developer / Student (Seller)
-1. Sign up → choose **Developer** role.
-2. **New Listing** → paste GitHub URL *or* upload README → **Repo-Intake Agent** crawls and **auto-fills the technical form sheet** (stack, frameworks, tests, deploy, architecture, suggested category & tags).
-3. Review/edit the auto-filled fields; add the **Vercel preview URL**; set price/tiers (with **Pricing & Pitch Agent** suggestions).
+1. Sign up → choose **Developer** role. Option to verify student status to claim the **25% discount** or subscribe to the Monthly Pro Tier.
+2. **New Listing** → paste GitHub URL *or* upload README → **Repo-Intake Agent** crawls and **auto-fills the technical form sheet** (enforced limit of 2 active posts if on Free tier).
+3. Review/edit the auto-filled fields; add the **Vercel preview URL**; set price/tiers (with **Pricing & Pitch Agent** suggestions). Support for high-value posts (up to $15k+).
 4. Submit → **Verification Agent** checks quality/plausibility/red-flags → approve / request-changes / flag.
 5. Listing goes live; **Curation & Ranking Agent** computes its **Vitrine Score**.
-6. On purchase/advance → **notified** → deliver full build to buyer.
+6. When buyers initiate negotiations via an AI representative or submit custom feature requests, chat directly with the buyer/representative from the seller's inbox and approve estimated add-on pricing.
+7. On purchase/advance → **notified** → deliver full build to buyer.
 
 ### B) Buyer
 1. Browse the gallery (curated sections, filters, sorts) or ask the **Buyer Concierge**: *"React dashboard with Stripe, under $40, live demo."*
 2. Open a listing → **run the live preview** in a sandboxed device frame.
 3. Read AI-summarized spec + verified badges + reviews + Vitrine Score.
-4. Buy / pay advance → receive delivery → review the product.
+4. **Negotiate & Talk**: Click the "Ask AI to Bargain" button to spawn an **AI Representative** to talk/negotiate with the seller/developer on your behalf. 
+   - *Constraint*: Only logged-in buyers can have **up to 2 active representatives** at a time.
+5. **Request Features**: Submit a request for additional customizations. The Feature Cost Estimator agent automatically calculates recommended charges for the seller to approve.
+6. Buy / pay advance (supports high-value transactions up to $15k+ via payment gateways) → receive delivery → review the product.
 
 ### C) Admin / Curator
-1. Review the Verification Agent's queue (approve overrides, handle flags).
-2. Monitor agent runs, costs, and the event stream.
-3. Manage categories, featured slots, and disputes.
+1. Log in via the dedicated **Admin Auth Page** (`/admin/login`).
+2. Monitor all ongoing buyer-seller/representative chat logs for safety and moderation.
+3. Review the Verification Agent's queue (approve overrides, handle flags).
+4. Audit the platform's transactions ledger, tracking high-value payouts and collected commissions.
+5. Monitor agent runs, costs, and the event stream.
 
 ---
 
 ## 4. Feature Map (Primary + Subsidiary)
 
 ### Primary features
+- **Auth Expansion** — Three distinct portal pages: Login (`/login`), Signup (`/signup`), and Admin Login (`/admin/login`).
 - **Preview-hosted listings** — embedded sandboxed live demo per product + automated **demo health checks**.
-- **Agentic intake** — GitHub crawl / README upload → auto-filled **technical form sheet**.
-- **Agentic verification** — automated quality/fraud gate before go-live.
+- **Agentic intake & verification** — GitHub crawl / README upload → auto-filled spec + quality/plausibility checks.
 - **Vitrine Score** — AI + heuristic ranking (recency, completeness, reviews, UI beauty, demo health, engagement).
 - **Buyer Concierge** — semantic search + chat assistant + compare.
-- **Pricing & Pitch** — seller-side AI for tiers, copy, and business model.
-- **Demo-then-deliver** commerce flow with **advance payments** + seller notification.
-- **Boutique storefront** — curated sections, rich filtering/sorting/subsections, dark/light.
+- **AI Negotiator (Buyer Representative)** — Buyers can spawn an agent to negotiate deals on their behalf (limit of 2 concurrent active reps).
+- **Custom Feature Requests** — Buyers can request additional features; AI automatically estimates development cost.
+- **Direct Messaging** — Buyer-seller chat channels with an Admin panel view for auditing and moderation.
+- **Stakeholder Dashboards** — Tailored portals for Buyers (orders, chat inbox, active reps), Sellers (inventory, subscription/tier management, sales analytics), and Admins (verification queue, chat logs, ledger, cost meter).
+- **Payment Gateway** — Secured checkout supporting high-value transactions ($15,000+), advance milestone payments, and monthly subscriptions.
+- **Legal Footer Pages** — Dedicated pages for Terms of Service, Privacy Policy, and Disclaimer.
 
 ### Subsidiary / supporting features
+- **Seller Subscription & Commission System** — Handling free/paid accounts, student discounts, and platform cut rate.
 - **Managed preview hosting tier** (Vitrine hosts the demo / full app on native cloud VM; billed by duration).
 - **Reputation system** — reviews, ratings (Bayesian), verified-purchase badges, seller trust score.
 - **Collections & curated editorials** ("Staff picks", "Built this week", "Best UI").
-- **Seller analytics** — views, demo launches, conversion, revenue.
-- **Wishlist / follow developer / notify on update.**
-- **Versioning & changelogs** for products; "notify buyers of upgrade."
-- **License & secure delivery** (signed download links / license keys).
+- **Secure delivery** (signed download links / license keys).
 - **Promotion / featured slots** (student-discounted).
 - **Webhooks** for sellers (sale, advance, review).
 - **Admin curation console** + agent run dashboard + cost meter.
 - **Full-text + vector hybrid search** with facets.
-- **Audit log & moderation trail.**
 
 ---
 
 ## 5. The AI-Native Core — The Vitrine Agent Fleet
 
-Vitrine treats AI as the **core of the product**, not a feature bolted on. Five cooperating agents run an **event-driven workflow** (full specs, tools, memory, and orchestration in [AGENTS.md](./AGENTS.md)).
+Vitrine treats AI as the **core of the product**, not a feature bolted on. Seven cooperating agents run an **event-driven workflow** (description and tool specs in [AGENTS.md](./AGENTS.md)).
 
 | # | Agent | Trigger | What it does | Key tools |
 |---|-------|---------|--------------|-----------|
-| 1 | **Repo-Intake Agent** | New/updated listing | Crawls GitHub repo or reads uploaded README; **fills the entire technical form sheet**; suggests category, tags, summary, highlights. | `fetch_repo_tree`, `fetch_file`, `read_readme`, `detect_stack`, `embed_text`, `write_listing_fields` |
-| 2 | **Listing Verification Agent** | Listing submitted | Vets quality, completeness, plausibility (README ↔ claims), license sanity, spam/fraud signals → approve / request-changes / flag. | `check_demo_health`, `cross_check_claims`, `license_lookup`, `flag_listing` |
-| 3 | **Buyer Concierge Agent** | Buyer search/chat | Hybrid semantic + filter search; answers natural-language queries; compares & recommends with reasons. | `semantic_search`, `apply_filters`, `compare_products`, `get_listing` |
-| 4 | **Pricing & Pitch Agent** | Seller drafting | Suggests price tiers, writes listing copy & highlights, proposes a business model + advance-payment/upsell strategy. | `market_comps`, `get_listing`, `draft_copy`, `suggest_tiers` |
-| 5 | **Curation & Ranking Agent** | Listing live / nightly | Computes the **Vitrine Score** from recency, completeness, reviews, UI beauty (vision), demo health, engagement; assigns to curated sections. | `compute_features`, `vision_score_ui`, `bayesian_rating`, `rank_and_section` |
+| 1 | **Repo-Intake Agent** | New/updated listing | Crawls GitHub repo; **fills technical form sheet**; suggests category, tags. | `fetch_repo_tree`, `fetch_file`, `read_readme`, `detect_stack`, `embed_text`, `write_listing_fields` |
+| 2 | **Listing Verification Agent** | Listing submitted | Vets quality, completeness, plausibility (README ↔ claims) → approve/request-changes/flag. | `check_demo_health`, `cross_check_claims`, `license_lookup`, `flag_listing` |
+| 3 | **Buyer Concierge Agent** | Buyer search/chat | Hybrid search; answers natural-language queries; compares products. | `semantic_search`, `apply_filters`, `compare_products`, `get_listing` |
+| 4 | **Pricing & Pitch Agent** | Seller drafting | Suggests price tiers, writes copy, proposes business/upsell strategy. | `market_comps`, `get_listing`, `draft_copy`, `suggest_tiers` |
+| 5 | **Curation & Ranking Agent** | Listing live / nightly | Computes the **Vitrine Score** (vision UI score, recency, demo health, engagement). | `compute_features`, `vision_score_ui`, `bayesian_rating`, `rank_and_section` |
+| 6 | **Buyer Representative Agent** | Buyer initiates bargaining | Represents the buyer, chatting with the developer to negotiate pricing or custom packages. | `draft_negotiation_message`, `get_listing`, `get_buyer_constraints` |
+| 7 | **Feature Cost Estimator Agent** | Feature request submitted | Analyzes requested additional features and estimates recommended charges and milestones. | `estimate_feature_cost`, `get_listing` |
 
 ### How the agents work together (the publishing pipeline)
 ```
@@ -150,6 +166,8 @@ Developer submits ──▶ [event: listing.created]
 
 Seller drafting ──▶ Pricing & Pitch Agent (on-demand, interactive)
 Buyer searching ──▶ Buyer Concierge Agent (on-demand, streaming)
+Buyer bargaining ──▶ Buyer Representative Agent (active negotiation)
+Custom Request ──▶ Feature Cost Estimator Agent (charge estimation)
 ```
 
 **Design principles** (mapped to the *Agent Design & Workflow Engineering* criterion):

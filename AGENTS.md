@@ -142,6 +142,53 @@
 
 ---
 
+## 5.1. Buyer Representative Agent
+
+**Role:** Represent the buyer to negotiate pricing, terms, custom milestones, or bundle deals with the seller/developer.
+
+**Triggers:** Buyer activates negotiation on a listing.
+
+**Workflow:**
+1. **Load Context:** Retrieve listing details, buyer-defined constraints (target budget, maximum budget, timeline requirements), and previous messages in the conversation.
+2. **Formulate Negotiation Strategy:** Evaluate the listing's market comps and history to determine a reasonable offer and talking points.
+3. **Draft Message:** Call `draft_negotiation_message` to generate the next response in the chat thread.
+4. **Respond to Seller:** Post the message to the chat channel. The seller can reply directly, triggering the agent to evaluate the response and draft a counter-offer.
+
+**Tools:** `get_listing`, `draft_negotiation_message`, `market_comps`.
+
+**Memory:** Buyer preferences, active negotiation parameters (budget, target price), and chat history.
+
+**Guardrails:**
+- Buyers must be logged in to spawn representatives.
+- Enforce a strict limit of **maximum 2 active representatives** per buyer at any time.
+- The agent cannot exceed the buyer's declared maximum budget.
+- Cleanly disclose to the seller that they are interacting with an AI agent representative of the buyer.
+
+---
+
+## 5.2. Feature Cost Estimator Agent
+
+**Role:** Analyze requested additional features/customizations for a software listing and estimate development cost, effort, and recommended charges.
+
+**Triggers:** Buyer submits a custom feature request on a listing.
+
+**Workflow:**
+1. **Analyze Request:** Parse the buyer's detailed description of the requested customization.
+2. **Reference Listing Stack:** Load the listing's spec sheet (frameworks, databases, third-party integrations) to evaluate implementation complexity.
+3. **Estimate Cost:** Run `estimate_feature_cost` to calculate development hours, complexity weight, and recommend a dollar charge.
+4. **Suggest Milestones:** Propose structured payment milestones for high-value customization scopes.
+5. **Persist Suggestion:** Write the estimated invoice fields to the catalog database for developer/seller review and approval.
+
+**Tools:** `get_listing`, `estimate_feature_cost`.
+
+**Memory:** Context of the target software, standard engineering task rates, and prior feature requests.
+
+**Guardrails:**
+- Costs are recommendations only; both seller and buyer must explicitly approve the estimate before a milestone contract is created.
+- Detects impossible/malicious requests and flags them for human review rather than generating an estimate.
+
+---
+
 ## 6. Shared tool catalogue (typed functions)
 
 > All tools are server-side functions exposed to the model via OpenAI tool calling. Schemas live in `backend/ai/tools/`. Agents may only call tools listed in their section.
@@ -171,6 +218,8 @@
 | `write_listing_fields(id, fields)` | deterministic | persist form fields |
 | `submit_verdict(id, verdict)` | deterministic | persist verification verdict |
 | `flag_listing(id, reason)` | deterministic | escalate to admin |
+| `draft_negotiation_message(buyer_id, seller_id, listing_id, context)` | LLM | Drafts next negotiation message based on bounds and history |
+| `estimate_feature_cost(listing_id, feature_description)` | LLM-assisted | Evaluates feature request against codebase specs and estimates pricing |
 
 ---
 

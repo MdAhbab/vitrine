@@ -76,33 +76,60 @@ The defining interaction is **the live preview**. Every product card has a **"Ru
    - "Best UI" · "Built this week" · category leaderboards
    - A **Concierge search bar** front and center: a single elegant input ("Describe what you need…") that opens the AI Concierge.
    Not a wall of identical cards — vary rhythm with one or two large "feature" cards and editorial captions.
-2. **Browse / Search (`/browse`)** — left (or top, on mobile) **facet rail**: category, subcategory, tags, price range, license, has-live-demo, theming, framework/language. Sort: Vitrine Score (default), Newest, Price, Rating. Results in a responsive masonry-ish grid with skeletons. URL-synced filters.
+2. **Browse / Search (`/browse`)** — left (or top, on mobile) **facet rail**: category, subcategory, tags, price range, license, has-live-demo, theming, framework/language. Sort: Vitrine Score (default), Newest, Price, Rating. Results in a responsive masonry-ish grid with skeletons. URL-synced filters. Supports high-value products (up to $15k+).
 3. **Concierge (`/concierge` or a slide-over)** — a chat panel: user types natural language ("React dashboard with Stripe, under $40, live demo"), streamed assistant responses (SSE) with **inline product result cards** and reasons + a "compare" affordance. Feels like talking to a knowledgeable shop curator, not a chatbot widget.
 4. **Product page (`/p/:slug`)** —
-   - Hero: name, tagline, seller, price/tiers, **Vitrine Score ring**, verified badge, **live preview device frame** (the star).
+   - Hero: name, tagline, seller, price/tiers (supports high-value display up to $15k+), **Vitrine Score ring**, verified badge, **live preview device frame** (the star).
+   - **Bargaining Button & AI Rep Control**: A sticky/conspicuous "Ask AI to Bargain" button. If clicked, spawns a sidebar allowing the logged-in buyer to set constraints (target/max budget) and kick off an AI negotiator representative (max 2 active reps per buyer at any time).
+   - **Feature Request Panel**: A button allowing the buyer to describe additional customizations. Shows the AI Feature Cost Estimator's recommended charge before submission.
    - **The Spec Sheet:** the technical form sheet rendered as a beautiful, scannable, mono-accented spec table grouped by section (Planning, Design, Development, Architecture, Data, Testing, Security, Deployment). AI-filled fields show a subtle "auto-filled" marker; confidence-flagged fields look intentional, not broken.
    - Screenshots gallery, long description (markdown), reviews + rating distribution, "similar products" rail, and a sticky **Buy / Pay advance** panel.
 5. **Sell — New Listing wizard (`/sell/new`)** — the agentic flow:
-   - Step 1: **Import** — paste a GitHub URL *or* drag-drop/upload a README/files. A tasteful "AI is reading your repo…" state (progress, not a spinner soup).
+   - Step 1: **Import** — paste a GitHub URL *or* drag-drop/upload a README/files. (If the developer has reached the 2 active listings limit on the Free tier, prompts for a Pro monthly subscription).
    - Step 2: **Review the auto-filled spec** — the full form sheet pre-filled; AI-filled fields marked; low-confidence fields gently highlighted for confirmation; inline editing.
    - Step 3: **Preview & media** — add the `*.vercel.app` demo URL (with a live health check), screenshots.
    - Step 4: **Price & pitch** — call the **Pricing & Pitch Agent**: suggested tiers + drafted copy the seller accepts/edits.
    - Step 5: **Submit** → verification status view.
-6. **Seller dashboard (`/dashboard`)** — listings table with status + Vitrine Score, views/launches/conversion analytics (clean charts), orders + "deliver the full app" prompts, payouts ledger, webhooks.
-7. **Buyer area (`/orders`, `/library`)** — purchases, advance-payment status, delivered artifacts / license keys / download links, leave-a-review.
-8. **Admin (`/admin`)** — verification queue (approve / request changes / flag), agent-run cost meter + observability, category/featured management. Keep it functional but on-brand.
-9. **Auth (`/login`, `/signup`)** — minimal, elegant; role select (Buyer / Developer).
+6. **Seller dashboard (`/dashboard/seller`)** —
+   - **Listings inventory**: Grid/table with status + Vitrine Score (limit of 2 active listings enforced for Free tier).
+   - **Subscription & Tiers**: Upgrade form, billing tier status, and a verification portal for student status (to claim the 25% discount).
+   - **Feature Request Center**: Review buyer customization feature requests, modify quotes, and approve development scopes.
+   - **Chat Inbox**: Interactive messaging pane containing both direct buyer threads and negotiations with buyers' AI representatives (agent identifier clearly visible).
+   - **Analytics & Payouts**: Views/launches/conversion charts, payouts ledger, commissions collected by the platform.
+7. **Buyer dashboard (`/dashboard/buyer`)** — 
+   - **Orders & Library**: Purchases, advance-payment milestone statuses, delivered artifacts, license keys, and reviews editor.
+   - **AI Representative Control**: View active AI negotiators (shows active slots used: max 2 active reps indicator), adjust bargaining target/max budget constraints, and view live chat logs of the agent negotiating with the developer.
+   - **Feature Customizations**: View status of requested additional features, pricing quotes from developers, and checkout triggers to pay the charges.
+   - **Direct Messages**: Inbox for chatting with developers directly.
+8. **Admin dashboard (`/admin`)** —
+   - **Verification queue**: Approve / request changes / flag listing overrides.
+   - **Platform Chat Auditing**: Live dashboard to review all chats (direct and representative-mediated) on the platform for moderation.
+   - **Transactions Ledger**: Audit panel showing all sales, payouts, subscription revenues, and collected platform commissions.
+   - **Agent-run cost meter** + observability dashboards.
+9. **Separate Auth Pages** —
+   - **Login Page (`/login`)**: Minimal, elegant email/password + SSO login with role redirect.
+   - **Signup Page (`/signup`)**: Sign up wizard with Buyer / Developer role selection and student verification check.
+   - **Admin Login Page (`/admin/login`)**: Separate secure login portal strictly for administrator credentials.
+10. **Legal Footer Pages** —
+    - **Terms of Service (`/terms`)**: Platform policies, buyer-seller terms, high-value transaction guidelines, and AI agent usage.
+    - **Privacy Policy (`/privacy`)**: Data handling, OpenAI API data protection, and session tracking.
+    - **Disclaimer (`/disclaimer`)**: Platform liability exemption regarding custom software delivery, hosted previews uptime, and AI estimation advice.
 
 ## 4. Key components (build a small, consistent kit)
-- `ThemeToggle` (sun/moon, animated), `Logo`, `TopNav` (transparent over hero, solidifies on scroll), `Footer`.
-- `ProductCard` — framed object: primary screenshot, name, seller, price, **Vitrine Score chip**, tag row (mono), `Run preview` button, demo-health dot. Hover = lift + accent hairline.
+- `ThemeToggle` (sun/moon, animated), `Logo`, `TopNav` (transparent over hero, solidifies on scroll).
+- `Footer` — Clean layout with category links and explicit routes to `/terms`, `/privacy`, and `/disclaimer`.
+- `ProductCard` — framed object: primary screenshot, name, seller, price (supports mono typography for high-value tags up to $15k+), **Vitrine Score chip**, tag row (mono), `Run preview` button, demo-health dot. Hover = lift + accent hairline.
 - `PreviewFrame` — device-framed sandboxed iframe (browser/phone toggle, reload, open-in-new, live pulse, health dot, graceful "demo unavailable" state).
 - `VitrineScoreRing` — circular gauge (gold), tooltip showing the per-signal breakdown (completeness, reviews, UI, demo health, recency, engagement).
 - `SpecSheet` — sectioned technical table with `source`/confidence markers and mono labels.
 - `FacetRail`, `SortMenu`, `SearchBar`, `ConciergePanel` (streaming chat + inline result cards).
 - `Wizard` + `FormSheetEditor` (renders fields from the shared `FORM_SCHEMA`).
-- `TierTable`, `BuyPanel` (purchase vs. pay-advance), `ReviewList` + `RatingBars`.
-- `Badge` (Verified / Live demo / Best UI / New), `Skeleton`, `Toast`, `Modal`, `Tabs`, `Tooltip`, `EmptyState`.
+- `TierTable`, `BuyPanel` (purchase vs. pay-advance milestone triggers).
+- `AINegotiationConfig` — Sidebar/modal displaying buyer's active AI representatives (slot counter: N/2), sliders for target budget and max budget, and negotiation status controls.
+- `FeatureRequestForm` — Modal/panel to describe desired features, integrating a loading skeleton for the AI cost estimate, showing recommended charges, and approval checkboxes.
+- `SubscriptionUpgradeSelector` — Premium UI layout showing Free vs. Monthly Pro cards, a student discount toggle (showing 25% discount price math), and secure gateway checkout.
+- `RepInbox` — Combined messaging UI displaying user chat threads and active AI rep vs. Seller negotiation channels.
+- `Badge` (Verified / Live demo / Best UI / New / Student / Pro), `Skeleton`, `Toast`, `Modal`, `Tabs`, `Tooltip`, `EmptyState`.
 
 ## 5. Data layer & API contract
 Create `src/api/` with a typed client and a **mock implementation** toggled by `VITE_USE_MOCKS`. Match [backend.md §11](./backend.md#11-api-surface):

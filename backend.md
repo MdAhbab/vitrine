@@ -50,15 +50,15 @@
 
 | Service | Port | Responsibility | Sync API | Events emitted | Events consumed |
 |---|---|---|---|---|---|
-| **gateway** | 8000 | Auth check, routing, rate-limit, request validation, CORS, SSE proxy | all public routes | — | — |
-| **identity** | 8001 | Signup/login, JWT issue/refresh, roles, profiles | `/auth/*`, `/users/*` | `user.created` | — |
-| **catalog** | 8002 | Listings CRUD, form-sheet persistence, state machine, media | `/listings/*` | `listing.created/updated/enriched/verified/flagged/scored` | `listing.enriched/verified/scored` |
+| **gateway** | 8000 | Auth check, routing, rate-limit, request validation, CORS, SSE proxy, direct messaging routing | all public routes, `/chats/*` | — | — |
+| **identity** | 8001 | Signup/login (including admin auth), JWT issue/refresh, roles, profiles, student status verification | `/auth/*`, `/users/*` | `user.created` | — |
+| **catalog** | 8002 | Listings CRUD, form-sheet persistence, state machine, media, and feature requests management | `/listings/*`, `/feature-requests/*` | `listing.created/updated/enriched/verified/flagged/scored`, `feature.requested` | `listing.enriched/verified/scored` |
 | **search** | 8003 | Hybrid pgvector + facet search, suggestions | `/search/*` | — | `listing.scored` (reindex) |
-| **orders** | 8004 | Cart, checkout, advance payments, order state, payouts ledger | `/orders/*`, `/checkout/*`, `/webhooks/payments` | `order.created/paid/refunded` | — |
-| **notifications** | 8005 | In-app + email; "deliver the full app" prompts; seller webhooks | `/notifications/*` | — | `order.paid`, `listing.flagged`, `review.created` |
+| **orders** | 8004 | Cart, checkout, advance payments, payouts ledger, seller subscriptions, commissions tracking | `/orders/*`, `/checkout/*`, `/subscriptions/*`, `/webhooks/payments` | `order.created/paid/refunded`, `subscription.created/expired` | — |
+| **notifications** | 8005 | In-app + email; "deliver the full app" prompts; seller webhooks; chat notifications | `/notifications/*` | — | `order.paid`, `listing.flagged`, `review.created`, `chat.message_sent` |
 | **hosting** | 8006 | Preview URL validation, demo health checks, managed-hosting jobs | `/hosting/*` | `demo.health_changed` | `listing.created/updated` |
 | **reviews** | 8007 | Reviews/ratings, verified-purchase, reputation | `/reviews/*` | `review.created` | `order.paid` |
-| **ai-orchestrator** | 8010 | Runs the agent fleet, OpenAI client, budgets, cost meter | `/ai/*` (intake, concierge, pricing) | per-agent events | `listing.created/enriched/verified`, `review.created`, `cron.*` |
+| **ai-orchestrator** | 8010 | Runs the agent fleet (including buyer negotiator & feature cost estimator), OpenAI client, budgets, cost meter | `/ai/*` (intake, concierge, pricing, negotiate, estimate) | per-agent events | `listing.created/enriched/verified`, `review.created`, `feature.requested`, `cron.*` |
 
 > All services import from `backend/shared/` (db session, event bus, JWT, schemas, settings) so cross-cutting concerns are written once.
 
@@ -94,7 +94,7 @@ PostgreSQL, schema-per-service. Highlights (Pydantic v2 + SQLAlchemy 2.0; Alembi
 ```sql
 -- identity
 users(id pk, email uniq, password_hash, role enum[buyer,developer,admin],
-      display_name, avatar_url, trust_score numeric default 0, created_at)
+      display_name, avatar_url, trust_score numeric default 0, is_student bool default false, student_verified bool default false, created_at)
 
 -- catalog
 listings(id pk, seller_id fk users, name, slug uniq, tagline,
@@ -114,12 +114,26 @@ listing_embeddings(listing_id fk, embedding vector(1536), text_hash)  -- pgvecto
 
 listing_tiers(id pk, listing_id fk, name, price_cents, features jsonb)
 
+feature_requests(id pk, buyer_id fk users, listing_id fk listings, description text, 
+                 estimated_charge_cents int, developer_charge_cents int, developer_approved bool default false,
+                 status enum[pending_estimate, pending_dev_approval, pending_buyer_approval, approved, rejected], created_at)
+
 -- orders
 orders(id pk, buyer_id fk, listing_id fk, tier_id fk, amount_cents,
        kind enum[purchase,advance], status enum[pending,paid,delivered,
        refunded,disputed], provider, provider_ref, created_at)
 deliveries(id pk, order_id fk, artifact_url, license_key, delivered_at)
 payouts(id pk, seller_id fk, order_id fk, amount_cents, status)
+
+subscriptions(id pk, seller_id fk users, tier enum[free, monthly_pro], price_cents,
+              start_date, end_date, active bool, is_student bool default false, created_at)
+
+-- chats (direct messages and negotiation chats)
+chats(id pk, buyer_id fk users, seller_id fk users, listing_id fk listings, created_at)
+chat_messages(id pk, chat_id fk chats, sender_id fk users, text text, is_agent_rep bool default false, created_at)
+
+negotiations(id pk, chat_id fk chats, buyer_id fk users, status enum[active, closed], 
+             budget_cents int, target_cents int, active_rep_count_at_creation int, created_at)
 
 -- reviews
 reviews(id pk, listing_id fk, buyer_id fk, rating int, body,
@@ -133,7 +147,7 @@ ai_cache(key pk, value jsonb, created_at, ttl)   -- also mirrored in Redis
 audit_log(id pk, actor, action, target, meta jsonb, created_at)
 ```
 
-Indexes: `listings(status, category, vitrine_score)`, GIN on `listing_fields.value`, `listing_embeddings` IVFFlat/HNSW vector index, full-text GIN on name/description.
+Indexes: `listings(status, category, vitrine_score)`, GIN on `listing_fields.value`, `listing_embeddings` IVFFlat/HNSW vector index, full-text GIN on name/description, `chat_messages(chat_id, created_at)`, `subscriptions(seller_id, active)`.
 
 ---
 
@@ -236,7 +250,9 @@ class StripeProvider(PaymentProvider): ...   # drop-in later; signed webhooks
 
 ```
 POST   /auth/signup | /auth/login | /auth/refresh
+POST   /auth/admin/login                  # admin login
 GET    /users/me
+POST   /users/verify-student              # student status upload
 
 POST   /listings                         # create draft
 POST   /listings/{id}/intake             # trigger Repo-Intake (repo_url | readme upload)
@@ -248,12 +264,27 @@ GET    /listings?category=&tags=&sort=vitrine_score&...
 POST   /ai/intake                         # interactive intake (sync)
 POST   /ai/concierge   (SSE)              # buyer chat/search stream
 POST   /ai/pricing                        # pricing & pitch suggestions
+POST   /ai/negotiate                      # active AI representative bargaining step
+POST   /ai/estimate-feature               # AI custom feature request cost estimation
 
 GET    /search?q=...                      # hybrid search
 
 POST   /checkout                          # create order (purchase|advance)
 POST   /webhooks/payments                 # provider webhook (signed)
 POST   /orders/{id}/deliver               # seller uploads full app
+GET    /transactions/ledger               # transaction auditing (admin-only)
+
+POST   /subscriptions/subscribe           # subscribe to Pro Monthly Tier
+GET    /subscriptions/status              # check current subscription tier
+
+GET    /chats                             # list conversations
+GET    /chats/{id}/messages               # get message history
+POST   /chats/{id}/messages              # send message (direct or as agent)
+POST   /chats/negotiate/start             # spawn buyer agent representative (max 2 active)
+
+POST   /feature-requests                  # submit feature request
+PATCH  /feature-requests/{id}/quote       # developer sets/approves feature charge
+POST   /feature-requests/{id}/approve     # buyer accepts custom charge and pays
 
 POST   /reviews                           # verified-purchase review
 GET    /notifications                     # in-app feed
@@ -262,6 +293,7 @@ GET    /notifications                     # in-app feed
 GET    /admin/verification-queue
 POST   /admin/listings/{id}/decision
 GET    /admin/agent-runs                  # cost meter + observability
+GET    /admin/chats                       # view all user chats (moderation)
 ```
 
 ---
