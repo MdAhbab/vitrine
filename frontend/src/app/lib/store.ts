@@ -243,6 +243,13 @@ export const useStore = create<State>((set, get) => ({
       await new Promise((r) => setTimeout(r, 700));
       const text = lines[Math.floor(Math.random() * lines.length)];
       get().sendMessage(threadId, text, { id: 'agent', name: `${thread.buyerName}'s AI Rep`, isAgent: true });
+    } else {
+      try {
+        await api.negotiate(threadId);
+        await get().loadMessages(threadId);
+      } catch (e) {
+        console.error("Agent negotiation failed", e);
+      }
     }
   },
 
