@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from backend.shared.db import get_session
-from backend.shared.models import AdminConfig, AgentRun
+from backend.shared.models import AdminConfig, AgentRun, Listing, Chat, User
 from backend.shared.schemas.ai import (
     ConciergeIn,
     EstimateFeatureIn,
@@ -121,6 +121,74 @@ async def agent_runs(user: Principal = Depends(require_role("admin")),
                   "status": r.status, "ts": int(r.created_at.timestamp() * 1000)}
                  for r in rows],
     }
+
+
+@router.get("/admin/verification-queue", response_model=list[dict])
+async def verification_queue(user: Principal = Depends(require_role("admin")),
+                             db: AsyncSession = Depends(get_session)) -> list[dict]:
+    stmt = select(Listing).where(Listing.status.in_(["review", "flagged", "enriching", "draft"]))
+    rows = (await db.execute(stmt)).scalars().all()
+    res = []
+    for r in rows:
+        seller = await db.get(User, r.owner_id)
+        res.append({
+            "id": r.id,
+            "name": r.name,
+            "cover": r.cover or "",
+            "category": r.category,
+            "price": r.price_cents / 100,
+            "framework": r.framework or "",
+            "status": r.status,
+            "seller": {"name": seller.display_name if seller else "Unknown"}
+        })
+    return res
+
+
+@router.post("/admin/listings/{listing_id}/decision")
+async def admin_decision(listing_id: str, body: dict,
+                         user: Principal = Depends(require_role("admin")),
+                         db: AsyncSession = Depends(get_session)) -> dict:
+    verdict = body.get("verdict")
+    from fastapi import HTTPException
+    if verdict not in ["approve", "reject"]:
+        raise HTTPException(400, "Verdict must be approve or reject")
+        
+    listing = await db.get(Listing, listing_id)
+    if not listing:
+        raise HTTPException(404, "Listing not found")
+        
+    listing.status = "live" if verdict == "approve" else "rejected"
+    db.add(listing)
+    await db.commit()
+    return {"id": listing.id, "status": listing.status}
+
+
+@router.get("/admin/chats", response_model=list[dict])
+async def admin_chats(user: Principal = Depends(require_role("admin")),
+                      db: AsyncSession = Depends(get_session)) -> list[dict]:
+    stmt = select(Chat).order_by(Chat.created_at.desc())
+    rows = (await db.execute(stmt)).scalars().all()
+    res = []
+    for c in rows:
+        listing = await db.get(Listing, c.listing_id)
+        buyer = await db.get(User, c.buyer_id)
+        seller = await db.get(User, c.seller_id)
+        res.append({
+            "id": c.id,
+            "productId": c.listing_id,
+            "productName": listing.name if listing else "",
+            "productCover": (listing.cover or "") if listing else "",
+            "buyerId": c.buyer_id,
+            "buyerName": buyer.display_name if buyer else "",
+            "sellerId": c.seller_id,
+            "sellerName": seller.display_name if seller else "",
+            "isAgent": c.is_agent,
+            "agentBudget": (c.agent_budget_cents / 100) if c.agent_budget_cents else None,
+            "status": c.status,
+            "unreadFor": c.unread_for or [],
+            "createdAt": int(c.created_at.timestamp() * 1000),
+        })
+    return res
 
 
 @asynccontextmanager

@@ -1,10 +1,11 @@
-import { useState } from 'react';
-import { Shield, MessageSquare, Receipt, Users, Sparkles, Check, X, Eye, Settings2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Shield, MessageSquare, Receipt, Users, Sparkles, Check, X, Eye } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useStore } from '../../lib/store';
 import { Inbox } from '../../components/Inbox';
 import { CuratorConsole } from '../../components/CuratorConsole';
 import { Tabs, Stat, Pill } from './BuyerDashboard';
+import { api, USE_MOCKS } from '../../lib/api';
 
 const series = Array.from({ length: 14 }, (_, i) => ({
   d: `${i + 1}`,
@@ -16,6 +17,52 @@ export function AdminDashboard() {
   const { user, listings, transactions, threads } = useStore();
   if (!user) return null;
   const [tab, setTab] = useState<'overview' | 'queue' | 'transactions' | 'chats' | 'users' | 'agents' | 'console'>('overview');
+
+  const [queue, setQueue] = useState<any[]>([]);
+  const [loadingQueue, setLoadingQueue] = useState(false);
+
+  const loadQueue = async () => {
+    if (USE_MOCKS) {
+      setQueue(listings.slice(0, 4).map((l, i) => ({
+        id: l.id,
+        name: l.name,
+        cover: l.cover,
+        category: l.category,
+        price: l.price,
+        framework: l.framework,
+        status: i === 0 ? 'review' : 'live',
+        seller: { name: l.seller.name }
+      })));
+      return;
+    }
+    setLoadingQueue(true);
+    try {
+      const q = await api.adminVerificationQueue();
+      setQueue(q);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingQueue(false);
+    }
+  };
+
+  useEffect(() => {
+    loadQueue();
+  }, [listings]);
+
+  const handleDecision = async (id: string, verdict: 'approve' | 'reject') => {
+    if (USE_MOCKS) {
+      setQueue((prev) => prev.filter((item) => item.id !== id));
+      return;
+    }
+    try {
+      await api.adminDecision(id, verdict);
+      await loadQueue();
+    } catch (e) {
+      console.error(e);
+      alert("Failed to submit verdict");
+    }
+  };
 
   const grossVolume = transactions.reduce((s, t) => s + t.amount, 0);
   const houseTake = transactions.reduce((s, t) => s + t.commission, 0);
@@ -78,21 +125,23 @@ export function AdminDashboard() {
 
         {tab === 'queue' && (
           <div className="space-y-3">
-            {listings.slice(0, 4).map((l, i) => (
+            {loadingQueue && <div className="text-sm text-text-muted">Loading queue...</div>}
+            {!loadingQueue && queue.length === 0 && <div className="text-sm text-text-muted">No pending listings in the queue.</div>}
+            {queue.map((l) => (
               <article key={l.id} className="hairline rounded-2xl bg-surface p-5 flex items-center gap-5">
                 <img src={l.cover} alt="" className="w-16 h-16 rounded-lg object-cover" />
                 <div className="flex-1 min-w-0">
                   <div className="font-serif text-lg">{l.name}</div>
-                  <div className="text-xs text-text-muted">by {l.seller.name} · {l.category} · ${l.price.toLocaleString()}</div>
+                  <div className="text-xs text-text-muted">by {l.seller?.name} · {l.category} · ${l.price.toLocaleString()}</div>
                   <div className="mt-2 flex gap-2 flex-wrap">
-                    <Pill kind={i === 0 ? 'wait' : 'good'}>{i === 0 ? 'pending review' : 'auto-pass'}</Pill>
+                    <Pill kind={l.status === 'review' || l.status === 'flagged' || l.status === 'enriching' ? 'wait' : 'good'}>{l.status}</Pill>
                     <Pill kind="good">{l.framework}</Pill>
                     <Pill kind="good">demo healthy</Pill>
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-success hover:text-success" aria-label="Approve"><Check size={14} /></button>
-                  <button className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-danger hover:text-danger" aria-label="Reject"><X size={14} /></button>
+                  <button onClick={() => handleDecision(l.id, 'approve')} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-success hover:text-success" aria-label="Approve"><Check size={14} /></button>
+                  <button onClick={() => handleDecision(l.id, 'reject')} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-danger hover:text-danger" aria-label="Reject"><X size={14} /></button>
                   <button className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-accent" aria-label="View"><Eye size={14} /></button>
                 </div>
               </article>

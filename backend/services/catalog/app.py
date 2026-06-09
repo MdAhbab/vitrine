@@ -16,7 +16,7 @@ from backend.shared.events import bus
 from backend.shared.ids import slugify
 from backend.shared.models import Listing, ListingField, ListingTier, User, FeatureRequest
 from backend.shared.schemas.listing import IntakeIn, ListingCreateIn, ProductOut
-from backend.shared.security import Principal, current_user, require_role
+from backend.shared.security import Principal, current_user, require_role, optional_user
 
 from .serializers import to_product
 
@@ -39,8 +39,16 @@ async def list_listings(
     q: str | None = None,
     limit: int = Query(60, le=200),
     offset: int = 0,
+    owner: str | None = None,
+    user: Principal | None = Depends(optional_user),
 ) -> list[ProductOut]:
-    stmt = select(Listing).where(Listing.status == "live")
+    if owner == "me":
+        if not user:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required for owner=me")
+        stmt = select(Listing).where(Listing.owner_id == user.id)
+    else:
+        stmt = select(Listing).where(Listing.status == "live")
+
     if category:
         stmt = stmt.where(Listing.category == category)
     if q:

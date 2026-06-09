@@ -74,6 +74,20 @@ async def current_user(
     return Principal(claims["sub"], claims.get("role", "buyer"))
 
 
+async def optional_user(
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> Principal | None:
+    if not creds:
+        return None
+    try:
+        claims = decode_token(creds.credentials)
+        if claims.get("kind") != "access":
+            return None
+        return Principal(claims["sub"], claims.get("role", "buyer"))
+    except Exception:
+        return None
+
+
 def require_role(*roles: Role):
     async def _guard(user: Principal = Depends(current_user)) -> Principal:
         if user.role not in roles:

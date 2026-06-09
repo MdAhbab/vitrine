@@ -49,7 +49,10 @@ async def _thread_out(db: AsyncSession, c: Chat) -> ThreadOut:
 @router.get("/chats", response_model=list[ThreadOut])
 async def list_chats(user: Principal = Depends(current_user),
                      db: AsyncSession = Depends(get_session)) -> list[ThreadOut]:
-    stmt = select(Chat).where((Chat.buyer_id == user.id) | (Chat.seller_id == user.id))
+    if user.role == "admin":
+        stmt = select(Chat)
+    else:
+        stmt = select(Chat).where((Chat.buyer_id == user.id) | (Chat.seller_id == user.id))
     rows = (await db.execute(stmt.order_by(Chat.created_at.desc()))).scalars().all()
     return [await _thread_out(db, c) for c in rows]
 
