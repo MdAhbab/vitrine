@@ -53,13 +53,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Vitrine API Gateway", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[settings.FRONTEND_ORIGIN],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# In local dev, accept ANY localhost/127.0.0.1 port — Vite hops to 5174/5175…
+# when 5173 is busy, and a hardcoded origin would silently break every API call
+# (the #1 "nothing happens in the UI" cause). In prod, lock to FRONTEND_ORIGIN.
+if settings.ENV == "local":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[settings.FRONTEND_ORIGIN],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 for r in (
     identity_router, catalog_router, search_router, orders_router,

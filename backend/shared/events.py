@@ -77,11 +77,12 @@ class _RedisBus:
         return handlers
 
     async def publish(self, type_: str, payload: dict, **kw) -> None:
+        # Only enqueue. The consumer loop (start_consumer) is the SINGLE place
+        # that dispatches to handlers — dispatching here too would double-run
+        # every handler in the publishing process.
         event = make_event(type_, payload, **kw)
         r = await self._client()
         await r.xadd(STREAM, {"data": json.dumps(event)})
-        for h in self._handlers_for(type_):
-            asyncio.create_task(_safe(h, event))
 
     async def start_consumer(self) -> None:
         if self._consumer_task:

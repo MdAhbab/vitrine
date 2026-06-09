@@ -16,7 +16,7 @@ export type Product = {
   badges: ('verified' | 'best-ui' | 'new' | 'live-demo')[];
   screenshots: string[];
   cover: string;
-  ratingDistribution: number[]; // 1..5
+  ratingDistribution: number[]; // 5★→1★ (index 0 = 5-star %)
   rating: number;
   reviewsCount: number;
   description: string;
@@ -170,7 +170,7 @@ const make = (
   badges,
   screenshots: baseScreens,
   cover: COVERS[cover],
-  ratingDistribution: [2, 3, 8, 24, 63],
+  ratingDistribution: [63, 24, 8, 3, 2],
   rating: 4.7,
   reviewsCount: 128 + i * 7,
   description:

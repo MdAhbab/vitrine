@@ -10,8 +10,10 @@ Demo logins (password = email local-part):
   admin@vitrine.io   / admin
   june@vitrine.io    / june      (buyer)
   marco@vitrine.io   / marco     (buyer)
+  sana@vitrine.io    / sana      (buyer)
   maker@vitrine.io   / maker     (seller — Atelier Foxglove)
   dev@vitrine.io     / dev       (seller — Studio Korr)
+  studio@vitrine.io  / studio    (seller — Studio Vellum)
 """
 from __future__ import annotations
 
@@ -33,7 +35,8 @@ from backend.shared.models import (
 from backend.shared.security import hash_password
 from backend.ai.client import client
 
-SEED_VERSION = "2"
+SEED_VERSION = "4"
+DEMO_URL = "https://nextgram.vercel.app"
 
 COVER = "https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=1600&q=80"
 SHOTS = [
@@ -56,7 +59,7 @@ COVERS = {
 }
 
 # (name, tagline, category, price, framework, score, tags, cover_key, description, seller_key)
-# seller_key: "foxglove" | "korr"
+# seller_key: "foxglove" | "korr" | "vellum"
 LISTINGS = [
     # ── Atelier Foxglove (maker) ──────────────────────────────────────────
     ("Halcyon", "A quiet operations cockpit", "Dashboards", 89, "Next.js", 96,
@@ -130,6 +133,44 @@ LISTINGS = [
     ("Vitrine Telehealth", "HIPAA-aware telehealth platform", "Healthcare", 32000, "Next.js", 95,
      ["healthcare", "enterprise", "telehealth"], "healthcare",
      "Video consultations, scheduling, and compliance auditing reports.", "korr"),
+
+    # ── Studio Vellum (studio) ────────────────────────────────────────────────
+    ("Maison ERP", "A full enterprise resource platform", "Enterprise", 18500, "Next.js", 97,
+     ["enterprise", "erp", "full-app"], "enterprise",
+     "Complete ERP codebase — inventory, HR, finance, and procurement in one branded surface.", "vellum"),
+    ("Meridian Suite", "Enterprise workflow orchestration", "Enterprise", 12000, "React", 94,
+     ["enterprise", "workflow", "saas"], "enterprise",
+     "Multi-tenant workflow engine with role hierarchies, audit trails, and SSO integration.", "vellum"),
+    ("Solace Health", "Patient engagement and care coordination", "Healthcare", 499, "React", 93,
+     ["healthcare", "patient", "portal"], "healthcare",
+     "Patient portal with appointment booking, messaging, and document upload — HIPAA-aware.", "vellum"),
+    ("Epoch Analytics", "Long-horizon trend analytics", "Analytics", 169, "Next.js", 92,
+     ["analytics", "trends", "time-series"], "analytics",
+     "Time-series analytics dashboard with anomaly detection and exportable PDF reports.", "vellum"),
+    ("Tableau Fin", "Portfolio and wealth tracking", "Finance", 229, "React", 91,
+     ["finance", "portfolio", "wealth"], "finance",
+     "Personal and family wealth tracker with multi-currency support and allocation charts.", "vellum"),
+    ("Arcade CRM", "Lightweight CRM for indie consultants", "CRM", 59, "Svelte", 88,
+     ["crm", "consulting", "solo"], "crm",
+     "Minimal CRM built for solo consultants — contacts, notes, and follow-up reminders.", "vellum"),
+    ("Prism Storefront", "Design-led commerce for creative studios", "E-commerce", 189, "Next.js", 93,
+     ["commerce", "creative", "portfolio"], "ecommerce",
+     "Portfolio-forward product pages with a fluid, magazine-style checkout flow.", "vellum"),
+    ("Fieldnotes CMS", "Structured content for research teams", "CMS", 99, "Astro", 90,
+     ["cms", "research", "structured"], "cms",
+     "CMS built around typed content schemas, citation management, and offline drafting.", "vellum"),
+    ("Coda Auth", "Zero-config passkey authentication", "Auth", 89, "Next.js", 91,
+     ["auth", "passkey", "webauthn"], "auth",
+     "Drop-in passkey and biometric auth layer with session management and device registry.", "vellum"),
+    ("Canvas Dash", "Visual project status board", "Dashboards", 99, "React", 91,
+     ["dashboard", "projects", "kanban"], "dashboard",
+     "Drag-and-drop project dashboard with milestone tracking and team velocity charts.", "vellum"),
+    ("Bloom Tasks", "Collaborative task management, refined", "Productivity", 49, "Svelte", 89,
+     ["productivity", "tasks", "collaboration"], "productivity",
+     "Team task manager with threaded comments, priority lanes, and calendar sync.", "vellum"),
+    ("Orbit AI", "Embedded AI assistant framework", "AI", 199, "Next.js", 94,
+     ["ai", "assistant", "embeddings"], "ai",
+     "Plug-in AI assistant layer for existing apps — context injection, RAG, and tool calling.", "vellum"),
 ]
 
 DEFAULT_CONFIG = {
@@ -164,14 +205,14 @@ async def _add_listing(db, owner_id: str, spec: tuple) -> Listing:
     listing = Listing(
         owner_id=owner_id, name=name, slug=slugify(name), tagline=tagline,
         category=cat, tags=tags, framework=fw, price_cents=price * 100,
-        license="MIT", status="live", demo_url="https://demo.vitrine.app",
+        license="MIT", status="live", demo_url=DEMO_URL,
         demo_health="live", vitrine_score=score, cover=cover_url,
         screenshots=[cover_url] + SHOTS,
         badges=["verified", "live-demo"] + (["best-ui"] if score >= 93 else []),
         description=desc,
         rating=round(4.2 + (score % 8) / 10, 1),
         reviews_count=24 + (score % 50),
-        rating_distribution=[2, 4, 10, 28, 56],
+        rating_distribution=[56, 28, 10, 4, 2],  # 5★→1★ (matches ProductPage[5-star])
         score_breakdown=[
             {"label": "Completeness", "value": 90},
             {"label": "UI craft", "value": score - 2},
@@ -280,10 +321,19 @@ async def seed() -> None:
             role="seller", display_name="Studio Korr", handle="@korr",
             verified=True, plan="atelier",
         )
-        db.add_all([admin, buyer_june, buyer_marco, seller_foxglove, seller_korr])
+        seller_vellum = User(
+            email="studio@vitrine.io", password_hash=hash_password("studio"),
+            role="seller", display_name="Studio Vellum", handle="@vellum",
+            verified=True, plan="maison",
+        )
+        buyer_sana = User(
+            email="sana@vitrine.io", password_hash=hash_password("sana"),
+            role="buyer", display_name="Sana Iqbal",
+        )
+        db.add_all([admin, buyer_june, buyer_marco, buyer_sana, seller_foxglove, seller_korr, seller_vellum])
         await db.flush()
 
-        sellers = {"foxglove": seller_foxglove, "korr": seller_korr}
+        sellers = {"foxglove": seller_foxglove, "korr": seller_korr, "vellum": seller_vellum}
         listing_by_name: dict[str, Listing] = {}
         for spec in LISTINGS:
             owner = sellers[spec[-1]]
@@ -374,17 +424,22 @@ async def seed() -> None:
 
         foxglove_count = sum(1 for s in LISTINGS if s[-1] == "foxglove")
         korr_count = sum(1 for s in LISTINGS if s[-1] == "korr")
+        vellum_count = sum(1 for s in LISTINGS if s[-1] == "vellum")
+        total_count = foxglove_count + korr_count + vellum_count
         print(
-            f"[seed] v{SEED_VERSION}: 1 admin, 2 buyers, 2 sellers, "
-            f"{foxglove_count + korr_count} listings ({foxglove_count} Foxglove / {korr_count} Korr), "
+            f"[seed] v{SEED_VERSION}: 1 admin, 3 buyers, 3 sellers, "
+            f"{total_count} listings "
+            f"({foxglove_count} Foxglove / {korr_count} Korr / {vellum_count} Vellum), "
             f"5 chat threads."
         )
         print("[seed] logins:")
-        print("  admin@vitrine.io / admin")
-        print("  june@vitrine.io  / june   (buyer)")
-        print("  marco@vitrine.io / marco  (buyer)")
-        print("  maker@vitrine.io / maker  (seller — Atelier Foxglove)")
-        print("  dev@vitrine.io   / dev    (seller — Studio Korr)")
+        print("  admin@vitrine.io  / admin")
+        print("  june@vitrine.io   / june    (buyer)")
+        print("  marco@vitrine.io  / marco   (buyer)")
+        print("  sana@vitrine.io   / sana    (buyer)")
+        print("  maker@vitrine.io  / maker   (seller — Atelier Foxglove)")
+        print("  dev@vitrine.io    / dev     (seller — Studio Korr)")
+        print("  studio@vitrine.io / studio  (seller — Studio Vellum)")
 
 
 if __name__ == "__main__":

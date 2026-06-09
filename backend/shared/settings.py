@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
 
     # hosting / previews -------------------------------------------------
-    ALLOWED_PREVIEW_HOSTS: str = "vercel.app,preview.vitrine.app"
+    ALLOWED_PREVIEW_HOSTS: str = "vercel.app,preview.vitrine.app,demo.vitrine.app"
 
     # negotiation rules --------------------------------------------------
     MAX_ACTIVE_REPS_PER_BUYER: int = 2  # see AGENTS.md Buyer Negotiator

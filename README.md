@@ -441,8 +441,7 @@ vitrine/
 ├── README.md              ← this file (master plan)
 ├── AGENTS.md              ← agent roster, tools, memory, workflows
 ├── backend.md             ← backend architecture, data model, deploy
-├── run.py                 ← top-level launcher (→ local or cloud)
-├── localrun.py            ← local dev orchestration (services + Vite)
+├── run.py                 ← local dev orchestration (services + Vite; cloud dispatch)
 ├── cloudrun.py            ← native cloud VM deploy (systemd + nginx)
 ├── .env.example
 ├── backend/
@@ -463,16 +462,16 @@ vitrine/
 ```bash
 python run.py            # defaults to local; bootstraps + starts everything
 ```
-`run.py` dispatches to **`localrun.py`**, which:
+`run.py`:
 1. checks prerequisites (Python/Node/Postgres/Redis),
 2. creates a virtualenv + installs `backend/requirements.txt`,
-3. ensures the DB + `pgvector` + runs Alembic migrations + seeds demo data,
-4. installs frontend deps,
-5. starts all backend services (uvicorn per service) + agent workers + the Vite dev server, with unified logs.
+3. ensures the DB schema and optionally seeds demo data,
+4. installs frontend deps with `npm ci`,
+5. starts the FastAPI gateway and Vite dev server, with unified logs and accurate port fallback.
 
 ```bash
-python run.py local       # explicit local
-python run.py local --seed --fresh-db   # reset + reseed demo data
+python run.py --seed --fresh-db   # reset + reseed demo data
+python run.py --no-frontend       # API only
 ```
 
 ### Deploy to a cloud VM (native build, no Docker)

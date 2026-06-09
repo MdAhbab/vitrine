@@ -18,6 +18,8 @@ _PRICE = {  # USD per 1M tokens (input, output)
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1-nano": (0.10, 0.40),
+    "gpt-5-mini": (0.25, 2.00),
+    "gpt-5-nano": (0.05, 0.40),
 }
 
 
@@ -68,6 +70,24 @@ class AIClient:
     def enabled(self) -> bool:
         return bool(settings.OPENAI_API_KEY)
 
+    @staticmethod
+    def _chat_model_candidates(primary: str | None) -> list[str]:
+        """Try the configured model first, then known stable fallbacks."""
+        candidates = [
+            primary or "",
+            settings.OPENAI_MODEL,
+            "gpt-4o-mini",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-5-mini",
+            "gpt-5-nano",
+        ]
+        uniq: list[str] = []
+        for m in candidates:
+            if m and m not in uniq:
+                uniq.append(m)
+        return uniq
+
     async def _ensure_client(self):
         key = await self._resolve_api_key()
         if not key:
@@ -86,22 +106,34 @@ class AIClient:
         return True
 
     async def chat(self, messages: list[dict], *, tools: list | None = None,
-                   model: str | None = None, stream: bool = False) -> LLMResult:
+                   model: str | None = None, stream: bool = False,
+                   json_mode: bool = False) -> LLMResult:
         model = model or settings.OPENAI_MODEL
         if not await self._ensure_client():
             return self._stub(messages, model)
-        resp = await self._client.chat.completions.create(  # type: ignore[union-attr]
-            model=model, messages=messages, tools=tools or None,
-        )
-        choice = resp.choices[0].message
-        usage = resp.usage
-        return LLMResult(
-            text=choice.content or "",
-            tool_calls=[tc.model_dump() for tc in (choice.tool_calls or [])],
-            tokens_in=getattr(usage, "prompt_tokens", 0),
-            tokens_out=getattr(usage, "completion_tokens", 0),
-            model=model,
-        )
+        last_exc: Exception | None = None
+        for candidate in self._chat_model_candidates(model):
+            kwargs: dict = {"model": candidate, "messages": messages, "tools": tools or None}
+            # JSON mode forces a parseable object (used by Pricing / Feature estimator).
+            # Can't combine with tool calling, so only set it when no tools are passed.
+            if json_mode and not tools:
+                kwargs["response_format"] = {"type": "json_object"}
+            try:
+                resp = await self._client.chat.completions.create(**kwargs)  # type: ignore[union-attr]
+                choice = resp.choices[0].message
+                usage = resp.usage
+                return LLMResult(
+                    text=choice.content or "",
+                    tool_calls=[tc.model_dump() for tc in (choice.tool_calls or [])],
+                    tokens_in=getattr(usage, "prompt_tokens", 0),
+                    tokens_out=getattr(usage, "completion_tokens", 0),
+                    model=candidate,
+                )
+            except Exception as exc:
+                last_exc = exc
+                continue
+        assert last_exc is not None
+        raise last_exc
 
     async def embed(self, text: str, *, model: str | None = None) -> list[float]:
         model = model or settings.OPENAI_EMBED_MODEL

@@ -18,12 +18,21 @@ from .agents import curation, repo_intake, verification
 
 
 async def _on_listing_created(event: dict) -> None:
+    # On create we ENRICH (fill the form sheet) + score — but we do NOT run the
+    # Verification gate here: it must not flag/reject a brand-new empty draft
+    # before the seller has finished. Verification runs on `listing.submitted`.
     p = event["payload"]
     lid = p["listing_id"]
     await repo_intake.run(lid, p.get("repo_url"), p.get("readme_text"))
-    await verification.run(lid)
     await curation.run(lid)
-    # Each step should emit its own event in Phase 2; scaffold chains directly.
+
+
+async def _on_listing_submitted(event: dict) -> None:
+    # The seller pressed "submit for review" — NOW run the verification gate.
+    lid = event["payload"].get("listing_id")
+    if lid:
+        await verification.run(lid)
+        await curation.run(lid)
 
 
 async def _on_review_or_update(event: dict) -> None:
@@ -40,6 +49,7 @@ def register_handlers() -> None:
     if _REGISTERED:
         return
     bus.subscribe("listing.created", _on_listing_created)
+    bus.subscribe("listing.submitted", _on_listing_submitted)
     bus.subscribe("review.created", _on_review_or_update)
     bus.subscribe("listing.updated", _on_review_or_update)
     _REGISTERED = True

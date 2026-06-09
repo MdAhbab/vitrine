@@ -30,7 +30,7 @@ from backend.shared.schemas.ai import (
 )
 from backend.shared.schemas.listing import IntakeIn
 from backend.shared.crypto import encrypt_value
-from backend.shared.security import Principal, ai_rate_limit, current_user, require_role
+from backend.shared.security import Principal, ai_rate_limit, current_user, optional_user, require_role
 
 from .agents import concierge, feature_estimator, negotiator, pricing, repo_intake
 from .budget import budget
@@ -52,7 +52,7 @@ async def intake(body: IntakeIn, listing_id: str,
 
 
 @router.post("/ai/concierge", dependencies=[Depends(ai_rate_limit)])
-async def concierge_stream(body: ConciergeIn, user: Principal = Depends(current_user)):
+async def concierge_stream(body: ConciergeIn, user: Principal | None = Depends(optional_user)):
     async def gen():
         async for chunk in concierge.stream(body.query, body.history):
             yield {"data": json.dumps(chunk)}

@@ -32,7 +32,7 @@ async def health_check(url: str) -> dict:
     if not _host_allowed(url):
         return {"url": url, "health": "down", "reason": "host not allow-listed"}
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
             res = await client.get(url)
             if res.is_success:
                 return {"url": url, "health": "live"}

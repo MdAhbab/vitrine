@@ -22,8 +22,10 @@ class Base(DeclarativeBase):
     """Declarative base for all models (see shared/models.py)."""
 
 
-# SQLite needs check_same_thread off for async; Postgres ignores it.
-_connect_args = {"check_same_thread": False} if settings.is_sqlite else {}
+# SQLite needs check_same_thread off for async; `timeout` is the busy-wait
+# (seconds) so concurrent writers (background event handlers + requests) wait
+# instead of erroring with "database is locked". Postgres ignores these.
+_connect_args = {"check_same_thread": False, "timeout": 30} if settings.is_sqlite else {}
 
 engine = create_async_engine(
     settings.DATABASE_URL,
@@ -31,6 +33,17 @@ engine = create_async_engine(
     future=True,
     connect_args=_connect_args,
 )
+
+if settings.is_sqlite:
+    from sqlalchemy import event
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record):  # noqa: ANN001
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")      # concurrent readers + 1 writer
+        cur.execute("PRAGMA busy_timeout=30000")     # 30s wait on lock
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
 
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 

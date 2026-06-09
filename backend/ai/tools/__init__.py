@@ -443,8 +443,9 @@ async def rank_and_section(id: str, score: float) -> dict:
         listing = await db.get(Listing, id)
         if listing:
             listing.vitrine_score = score
-            if score >= 80:
-                listing.badges = list(set((listing.badges or []) + ["Best UI", "Curator Choice"]))
+            # Only canonical frontend badge keys (see Badge.tsx) — never free text.
+            if score >= 93 and "best-ui" not in (listing.badges or []):
+                listing.badges = list(dict.fromkeys((listing.badges or []) + ["best-ui"]))
             db.add(listing)
             await db.commit()
         return {"badges": listing.badges if listing else []}
@@ -533,8 +534,13 @@ async def flag_listing(id: str, reason: str) -> dict:
               "order_details": {"type": "string", "nullable": True}
           }, "required": ["buyer_id", "seller_id", "listing_id", "context"]})
 async def draft_negotiation_message(buyer_id: str, seller_id: str, listing_id: str, context: str, order_details: str | None = None) -> dict:
-    # return a negotiation suggestion
-    return {"text": f"Based on order logs: June Park has 2 active negotiations. Authorized max budget of $80 is anchored to custom setup addition."}
+    # Returns the grounded context the negotiator model uses to draft an offer.
+    # (The live negotiator builds its own message in agents/negotiator.py; this
+    # tool just surfaces structured context — no fabricated names/numbers.)
+    return {
+        "buyer_id": buyer_id, "seller_id": seller_id, "listing_id": listing_id,
+        "context": context, "order_details": order_details or "none",
+    }
 
 @register("estimate_feature_cost", "Estimate engineering task charge",
           {"type": "object", "properties": {

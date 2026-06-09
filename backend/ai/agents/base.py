@@ -24,7 +24,7 @@ _PROMPT_KEY_MAP = {
     "Repo-Intake Agent": "repoIntake",
     "Listing Verification Agent": "verification",
     "Buyer Concierge Agent": "concierge",
-    "Pricing & Pitch Agent": "pricing",
+    "Pricing & Pitch Agent": "pricingAgent",
     "Buyer Representative Agent": "buyerRep",
     "Feature Cost Estimator Agent": "featureEstimator",
     "Curation & Ranking Agent": "curation",
@@ -153,7 +153,17 @@ async def run_agent(agent: str, system: str, user_msg: str, *,
                 "name": tc_name,
                 "content": json.dumps(output)
             })
-            
+    else:
+        # Loop exhausted while still calling tools -> force one final text answer
+        # (no tools) so callers never get an empty draft/summary.
+        if not is_stub:
+            final = await client.chat(messages, tools=None)
+            total_in += final.tokens_in
+            total_out += final.tokens_out
+            total_cost += final.cost_usd
+            final_text = final.text
+            model_used = final.model
+
     budget.record(total_cost)
     
     final_result = LLMResult(
@@ -174,3 +184,59 @@ async def run_agent(agent: str, system: str, user_msg: str, *,
 
     await cache.set(key, final_result.__dict__, ttl=86400)
     return final_result
+
+
+def parse_json(text: str) -> dict | None:
+    """Best-effort parse of a model's JSON reply (tolerates ```json fences)."""
+    import json as _json
+    import re
+
+    if not text:
+        return None
+    t = text.strip()
+    if t.startswith("```"):
+        t = t[3:]
+        if t[:4].lower() == "json":
+            t = t[4:]
+        if "```" in t:
+            t = t[: t.rindex("```")]
+        t = t.strip()
+    try:
+        return _json.loads(t)
+    except Exception:
+        m = re.search(r"\{.*\}", t, re.S)
+        if m:
+            try:
+                return _json.loads(m.group(0))
+            except Exception:
+                return None
+    return None
+
+
+async def run_json(agent: str, system: str, user_msg: str, *,
+                   listing_id: str | None = None, trigger: str = "api") -> tuple[dict | None, bool]:
+    """One structured (JSON-mode) model call with budget + run logging.
+
+    Returns (parsed_dict_or_None, is_stub). Used by agents that need coherent
+    structured output (Pricing, Feature estimator) instead of a tool loop.
+    """
+    system = await resolve_system_prompt(agent, system)
+    try:
+        budget.check()
+    except BudgetExceeded:
+        return None, True
+
+    result = await client.chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": user_msg}],
+        json_mode=True,
+    )
+    budget.record(result.cost_usd)
+    async with SessionLocal() as db:
+        db.add(AgentRun(agent=agent, listing_id=listing_id, trigger_event=trigger,
+                        input_hash="", model=result.model, tokens_in=result.tokens_in,
+                        tokens_out=result.tokens_out, cost_usd=result.cost_usd,
+                        status="degraded" if result.stub else "ok"))
+        await db.commit()
+    if result.stub:
+        return None, True
+    return parse_json(result.text), False

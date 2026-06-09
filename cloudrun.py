@@ -31,7 +31,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-# Port map mirrors backend.md §2 / localrun.py. Internal services bind to
+# Port map mirrors backend.md §2 / run.py. Internal services bind to
 # 127.0.0.1; only nginx (443/80) is public.
 SERVICES: dict[str, tuple[str, int]] = {
     "gateway":         ("backend.gateway.app:app",                8000),

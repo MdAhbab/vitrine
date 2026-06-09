@@ -80,6 +80,10 @@ class ProductOut(BaseModel):
     businessModel: BusinessModel
     techStack: list[str] = []
     aiDraft: bool | None = None
+    # ownership + lifecycle — required by the frontend `Listing` type so the
+    # gallery (status==='live' filter) and seller/admin dashboards (ownerId) work.
+    status: str = "live"
+    ownerId: str = ""
 
 
 class ListingCreateIn(BaseModel):

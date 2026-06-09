@@ -19,6 +19,7 @@ export function Home({
 }) {
   const products = useCatalogProducts();
   const top = [...products].sort((a, b) => b.vitrineScore - a.vitrineScore);
+  const featured = top[0];
   const bestUi = Array.from(
     new Map(
       [...top.filter((p) => p.badges.includes('best-ui')), ...top].map((p) => [p.id, p])
@@ -68,32 +69,43 @@ export function Home({
             className="relative"
           >
             <div className="relative aspect-[5/6] rounded-2xl overflow-hidden hairline bg-surface">
-              <img src={top[0].cover} alt="" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
-              <div className="absolute top-5 left-5 right-5 flex items-center justify-between text-white/90 font-mono text-[10px] uppercase tracking-[0.25em]">
-                <span className="flex items-center gap-2"><span className="live-dot" /> Now showing</span>
-                <span>#001 / 2026</span>
-              </div>
-              <div className="absolute bottom-5 left-5 right-5 text-white">
-                <div className="font-serif text-4xl">{top[0].name}</div>
-                <div className="text-sm opacity-85 mt-1.5">{top[0].tagline}</div>
-                <div className="mt-5 flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => onPreview(top[0])}
-                    className="bg-accent text-[var(--accent-ink)] rounded-full pl-3 pr-4 h-10 text-sm font-medium inline-flex items-center gap-1.5"
-                  >
-                    <Sparkles size={13} /> Open the vitrine
-                  </button>
-                  <button onClick={() => onOpenProduct(top[0].slug)} className="text-sm opacity-90 border-b border-white/40">
-                    View piece →
-                  </button>
+              {featured ? (
+                <>
+                  <img src={featured.cover} alt="" className="w-full h-full object-cover" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+                  <div className="absolute top-5 left-5 right-5 flex items-center justify-between text-white/90 font-mono text-[10px] uppercase tracking-[0.25em]">
+                    <span className="flex items-center gap-2"><span className="live-dot" /> Now showing</span>
+                    <span>#001 / 2026</span>
+                  </div>
+                  <div className="absolute bottom-5 left-5 right-5 text-white">
+                    <div className="font-serif text-4xl">{featured.name}</div>
+                    <div className="text-sm opacity-85 mt-1.5">{featured.tagline}</div>
+                    <div className="mt-5 flex items-center justify-between gap-2">
+                      <button
+                        onClick={() => onPreview(featured)}
+                        className="bg-accent text-[var(--accent-ink)] rounded-full pl-3 pr-4 h-10 text-sm font-medium inline-flex items-center gap-1.5"
+                      >
+                        <Sparkles size={13} /> Open the vitrine
+                      </button>
+                      <button onClick={() => onOpenProduct(featured.slug)} className="text-sm opacity-90 border-b border-white/40">
+                        View piece →
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="absolute inset-0 grid place-items-center p-8 text-center">
+                  <div>
+                    <div className="font-serif text-3xl">Catalog is empty</div>
+                    <div className="text-sm text-text-soft mt-2">No listings are live yet. Add or seed listings to populate the gallery.</div>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
             <div className="absolute -bottom-6 -left-6 hidden md:block hairline rounded-xl bg-surface px-4 py-3 shadow-2xl">
               <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Vitrine Score</div>
               <div className="flex items-baseline gap-2 mt-0.5">
-                <span className="font-serif text-3xl tabular">{top[0].vitrineScore}</span>
+                <span className="font-serif text-3xl tabular">{featured?.vitrineScore ?? '--'}</span>
                 <span className="text-xs text-text-muted">/ 100</span>
               </div>
             </div>
@@ -158,7 +170,7 @@ export function Home({
         <Header eyebrow="By department" title="Wander the floor" />
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-px bg-border-c mt-10 hairline rounded-2xl overflow-hidden">
           {CATEGORIES.map((c) => {
-            const count = PRODUCTS.filter((p) => p.category === c).length;
+            const count = products.filter((p) => p.category === c).length;
             return (
               <button
                 key={c}

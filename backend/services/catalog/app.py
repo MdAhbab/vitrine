@@ -23,6 +23,18 @@ from .serializers import to_product
 router = APIRouter(tags=["catalog"])
 
 
+async def _unique_slug(db: AsyncSession, name: str, exclude_id: str | None = None) -> str:
+    """slug is UNIQUE; append -2, -3… on collision so duplicate names don't 500."""
+    base = slugify(name)
+    slug, i = base, 2
+    while True:
+        existing = (await db.execute(
+            select(Listing).where(Listing.slug == slug))).scalar_one_or_none()
+        if not existing or existing.id == exclude_id:
+            return slug
+        slug, i = f"{base}-{i}", i + 1
+
+
 async def _load(db: AsyncSession, listing: Listing) -> ProductOut:
     seller = await db.get(User, listing.owner_id)
     tiers = (await db.execute(select(ListingTier).where(ListingTier.listing_id == listing.id))).scalars().all()
@@ -83,7 +95,7 @@ async def create_listing(
     db: AsyncSession = Depends(get_session),
 ) -> ProductOut:
     listing = Listing(
-        owner_id=user.id, name=body.name, slug=slugify(body.name),
+        owner_id=user.id, name=body.name, slug=await _unique_slug(db, body.name),
         tagline=body.tagline, category=body.category,
         price_cents=int(body.price * 100), status="draft",
     )
@@ -126,7 +138,7 @@ async def update_listing(listing_id: str, patch: dict,
     
     if "name" in patch:
         listing.name = patch["name"]
-        listing.slug = slugify(patch["name"])
+        listing.slug = await _unique_slug(db, patch["name"], exclude_id=listing.id)
     if "tagline" in patch:
         listing.tagline = patch["tagline"]
     if "category" in patch:
@@ -181,6 +193,8 @@ async def submit_listing(listing_id: str,
     listing.status = "review"
     db.add(listing)
     await db.commit()
+    # Run the Verification gate now (not on create) — see workers._on_listing_submitted.
+    await bus.publish("listing.submitted", {"listing_id": listing.id}, actor=f"user:{user.id}")
     return {"id": listing.id, "status": listing.status}
 
 

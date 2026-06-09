@@ -67,4 +67,6 @@ def to_product(listing: Listing, seller: User | None,
         businessModel=BusinessModel(**(listing.business_model or {})),
         techStack=listing.tech_stack or [],
         aiDraft=listing.ai_draft,
+        status=listing.status,
+        ownerId=listing.owner_id,
     )

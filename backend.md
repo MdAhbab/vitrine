@@ -1,6 +1,6 @@
 # backend.md — Vitrine Backend Plan
 
-> Event-driven microservices, **native (no Docker)**, minimal infra: FastAPI + PostgreSQL/pgvector + Redis Streams + an OpenAI agent fleet. This document is the implementation blueprint and the deployment runbook for `localrun.py` and `cloudrun.py`.
+> Event-driven microservices, **native (no Docker)**, minimal infra: FastAPI + PostgreSQL/pgvector + Redis Streams + an OpenAI agent fleet. This document is the implementation blueprint and the deployment runbook for `run.py` and `cloudrun.py`.
 
 ## Contents
 1. [Principles & topology](#1-principles--topology)
@@ -15,7 +15,7 @@
 10. [Security](#10-security)
 11. [API surface](#11-api-surface)
 12. [Project layout](#12-project-layout)
-13. [Local run (`localrun.py`)](#13-local-run-localrunpy)
+13. [Local run (`run.py`)](#13-local-run-runpy)
 14. [Deployment (`cloudrun.py`)](#14-deployment-cloudrunpy)
 15. [Config & env](#15-config--env)
 
@@ -343,27 +343,27 @@ backend/
 
 ---
 
-## 13. Local run (`localrun.py`)
+## 13. Local run (`run.py`)
 
-`localrun.py` is a **native process orchestrator** (no Docker). It:
+`run.py` is a **native process orchestrator** (no Docker). It:
 
 1. **Preflight:** checks Python 3.11+, Node 18+, `psql`, `redis-cli`; verifies Postgres + Redis are reachable (offers `brew services start` hints on macOS).
 2. **Backend env:** creates `.venv`, installs `backend/requirements.txt`.
 3. **Database:** creates DB + role if missing, enables `pgvector` (`CREATE EXTENSION`), runs `alembic upgrade head`; `--seed` runs `seed.py`; `--fresh-db` drops & recreates first.
-4. **Frontend:** `npm install` in `frontend/` if needed.
+4. **Frontend:** `npm ci` in `frontend/` when a lockfile is present.
 5. **Launch (concurrently, prefixed logs):**
    - each service: `uvicorn backend.services.<svc>.app:app --port <port> --reload`
    - gateway on `:8000`
    - `ai-orchestrator` on `:8010` + `N` worker processes (`python -m backend.ai.workers`)
-   - frontend: `npm run dev` (Vite on `:5173`)
-6. **Health:** waits for `/health` on each service; prints a summary table + the storefront URL.
+   - frontend: `npm run dev -- --port <port> --strictPort`
+6. **Ports:** picks the next available API/frontend ports if defaults are occupied, then prints the real URLs.
 7. **Teardown:** Ctrl-C stops all child processes cleanly.
 
 ```bash
-python localrun.py                    # start everything
-python localrun.py --seed --fresh-db  # reset + reseed demo data
-python localrun.py --only gateway,catalog,ai-orchestrator
-python localrun.py --no-frontend
+python run.py                    # start everything
+python run.py --seed --fresh-db  # reset + reseed demo data
+python run.py --only gateway,catalog,ai-orchestrator
+python run.py --no-frontend
 ```
 
 ---
@@ -427,7 +427,7 @@ STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 
 # hosting / previews
-ALLOWED_PREVIEW_HOSTS=vercel.app,preview.vitrine.app
+ALLOWED_PREVIEW_HOSTS=vercel.app,preview.vitrine.app,demo.vitrine.app
 ```
 
 > See [AGENTS.md](./AGENTS.md) for agent behaviour and HCD mobile design guidelines.
@@ -679,7 +679,7 @@ No model or endpoint code changes required.
 > Status legend: ✅ done in scaffold · ◐ partial / harden · ▢ to build. Run after each phase.
 
 ### Phase 0 — Boot the scaffold ✅
-- `python run.py local` (or `uvicorn backend.gateway.app:app --reload`).
+- `python run.py` (or `uvicorn backend.gateway.app:app --reload`).
 - Gateway auto-creates SQLite tables; `python -m backend.seed` adds demo data.
 - Verify `GET /health`, `GET /listings`, `POST /auth/signup`, `POST /auth/login`.
 

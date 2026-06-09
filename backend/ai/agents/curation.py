@@ -58,11 +58,22 @@ async def run(listing_id: str) -> dict:
         if listing:
             listing.vitrine_score = score
             listing.score_breakdown = breakdown
-            badges = []
-            if score >= 80:
-                badges.append("Best UI")
-            if completeness >= 0.9:
-                badges.append("Curator Choice")
+            # IMPORTANT: only emit badge keys the frontend Badge component knows
+            # ('verified' | 'best-ui' | 'new' | 'live-demo'). Anything else
+            # crashes <Badge>. Derive from real signals; don't clobber identity.
+            from datetime import datetime, timezone
+            badges: list[str] = []
+            if listing.status == "live":
+                badges.append("verified")
+            if listing.demo_url and listing.demo_health == "live":
+                badges.append("live-demo")
+            if score >= 93:
+                badges.append("best-ui")
+            created = listing.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - created).days <= 14:
+                badges.append("new")
             listing.badges = badges
             db.add(listing)
             await db.commit()

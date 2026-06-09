@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useMemo } from 'react';
 import { PRODUCTS, type Product } from './mockData';
 import { api, USE_MOCKS } from './api';
 
@@ -151,49 +152,89 @@ export const MOCK_USER_IDS = {
 } as const;
 
 const SELLER_USERS: Record<string, { id: string; name: string }> = {};
-PRODUCTS.forEach((p, i) => { SELLER_USERS[p.seller.name] = { id: `seller_${i}`, name: p.seller.name }; });
+PRODUCTS.forEach((p, i) => {
+  const name = p.seller?.name;
+  if (name) SELLER_USERS[name] = { id: `seller_${i}`, name };
+});
+
+function sellerFor(product: Partial<Product> | undefined, fallbackIndex = 0): { id: string; name: string } {
+  const name = product?.seller?.name ?? 'Unknown Seller';
+  return SELLER_USERS[name] ?? { id: `seller_${Math.max(fallbackIndex, 0)}`, name };
+}
 
 export function sellerIdFor(product: Product): string {
   const idx = PRODUCTS.findIndex((p) => p.id === product.id);
-  return `seller_${idx >= 0 ? idx : 0}`;
+  return sellerFor(product, idx).id;
 }
 
 // Seed: a few demo threads and transactions so admin/seller dashboards never feel empty.
 const SEED_BUYER = { id: MOCK_USER_IDS.buyer, name: 'June Park' };
-const seedThreads: Thread[] = [
-  {
-    id: 't_seed_1', productId: PRODUCTS[0].id, productName: PRODUCTS[0].name, productCover: PRODUCTS[0].cover,
-    buyerId: SEED_BUYER.id, buyerName: SEED_BUYER.name,
-    sellerId: SELLER_USERS[PRODUCTS[0].seller.name].id, sellerName: PRODUCTS[0].seller.name,
-    isAgent: true, agentBudget: 79, status: 'open', unreadFor: ['seller'],
-    createdAt: Date.now() - 1000 * 60 * 60 * 4,
-  },
-  {
-    id: 't_seed_2', productId: PRODUCTS[3].id, productName: PRODUCTS[3].name, productCover: PRODUCTS[3].cover,
-    buyerId: 'demo_buyer_2', buyerName: 'Marco Rivers',
-    sellerId: SELLER_USERS[PRODUCTS[3].seller.name].id, sellerName: PRODUCTS[3].seller.name,
-    isAgent: false, status: 'open', unreadFor: ['seller'],
-    createdAt: Date.now() - 1000 * 60 * 60 * 28,
-  },
-];
-const seedMessages: Message[] = [
-  { id: 'm1', threadId: 't_seed_1', authorId: 'agent', authorName: 'June\'s AI Rep', isAgent: true, body: 'Hi — I represent June Park. She loves Halcyon and is ready to buy the Source tier today. Could you do $79 instead of $89 for a same-day commit? She\'d also leave a review.', ts: Date.now() - 1000 * 60 * 60 * 4 },
-  { id: 'm2', threadId: 't_seed_1', authorId: 'seller', authorName: PRODUCTS[0].seller.name, body: 'Appreciate the directness. $79 works if she takes Source + Setup at the listed price next month.', ts: Date.now() - 1000 * 60 * 60 * 3 },
-  { id: 'm3', threadId: 't_seed_2', authorId: 'demo_buyer_2', authorName: 'Marco Rivers', body: 'Hey — does Atrium AI support custom tools out of the box, or is that something I\'d have to wire up myself?', ts: Date.now() - 1000 * 60 * 60 * 28 },
-];
+const seedThreads: Thread[] = (() => {
+  const p0 = PRODUCTS[0];
+  const p3 = PRODUCTS[3];
+  const threads: Thread[] = [];
+  if (p0?.id && p0.name) {
+    const seller = sellerFor(p0, 0);
+    threads.push({
+      id: 't_seed_1', productId: p0.id, productName: p0.name, productCover: p0.cover ?? '',
+      buyerId: SEED_BUYER.id, buyerName: SEED_BUYER.name,
+      sellerId: seller.id, sellerName: seller.name,
+      isAgent: true, agentBudget: 79, status: 'open', unreadFor: ['seller'],
+      createdAt: Date.now() - 1000 * 60 * 60 * 4,
+    });
+  }
+  if (p3?.id && p3.name) {
+    const seller = sellerFor(p3, 3);
+    threads.push({
+      id: 't_seed_2', productId: p3.id, productName: p3.name, productCover: p3.cover ?? '',
+      buyerId: 'demo_buyer_2', buyerName: 'Marco Rivers',
+      sellerId: seller.id, sellerName: seller.name,
+      isAgent: false, status: 'open', unreadFor: ['seller'],
+      createdAt: Date.now() - 1000 * 60 * 60 * 28,
+    });
+  }
+  return threads;
+})();
 
-const seedTxns: Transaction[] = [
-  { id: 'tx_1', productId: PRODUCTS[1].id, productName: PRODUCTS[1].name, buyerId: SEED_BUYER.id, buyerName: SEED_BUYER.name, sellerId: SELLER_USERS[PRODUCTS[1].seller.name].id, sellerName: PRODUCTS[1].seller.name, tier: 'Source + Setup', amount: 209, commission: 21, status: 'paid', ts: Date.now() - 1000 * 60 * 60 * 24 * 3 },
-  { id: 'tx_2', productId: PRODUCTS[4].id, productName: PRODUCTS[4].name, buyerId: 'demo_buyer_3', buyerName: 'Hana Cole', sellerId: SELLER_USERS[PRODUCTS[4].seller.name].id, sellerName: PRODUCTS[4].seller.name, tier: 'Bespoke', amount: 479, commission: 48, status: 'paid', ts: Date.now() - 1000 * 60 * 60 * 24 * 5 },
-  { id: 'tx_3', productId: PRODUCTS[2].id, productName: PRODUCTS[2].name, buyerId: 'demo_buyer_4', buyerName: 'Sam Ortiz', sellerId: SELLER_USERS[PRODUCTS[2].seller.name].id, sellerName: PRODUCTS[2].seller.name, tier: 'Source', amount: 149, commission: 15, status: 'pending', ts: Date.now() - 1000 * 60 * 60 * 8 },
-];
+const seedMessages: Message[] = (() => {
+  const p0 = PRODUCTS[0];
+  const p3 = PRODUCTS[3];
+  const messages: Message[] = [];
+  if (p0?.name) {
+    const seller = sellerFor(p0, 0);
+    messages.push(
+      { id: 'm1', threadId: 't_seed_1', authorId: 'agent', authorName: 'June\'s AI Rep', isAgent: true, body: `Hi — I represent June Park. She loves ${p0.name} and is ready to buy the Source tier today. Could you do $79 for a same-day commit? She'd also leave a review.`, ts: Date.now() - 1000 * 60 * 60 * 4 },
+      { id: 'm2', threadId: 't_seed_1', authorId: 'seller', authorName: seller.name, body: 'Appreciate the directness. $79 works if she takes Source + Setup at the listed price next month.', ts: Date.now() - 1000 * 60 * 60 * 3 },
+    );
+  }
+  if (p3?.name) {
+    messages.push({ id: 'm3', threadId: 't_seed_2', authorId: 'demo_buyer_2', authorName: 'Marco Rivers', body: `Hey — does ${p3.name} support custom tools out of the box, or is that something I'd have to wire up myself?`, ts: Date.now() - 1000 * 60 * 60 * 28 });
+  }
+  return messages;
+})();
+
+const seedTxns: Transaction[] = [PRODUCTS[1], PRODUCTS[4], PRODUCTS[2]].flatMap((p, i) => {
+  if (!p?.id || !p.name) return [];
+  const seller = sellerFor(p, i);
+  const buyers = [
+    { id: SEED_BUYER.id, name: SEED_BUYER.name, tier: 'Source + Setup', amount: 209, commission: 21, status: 'paid' as const, ageDays: 3 },
+    { id: 'demo_buyer_3', name: 'Hana Cole', tier: 'Bespoke', amount: 479, commission: 48, status: 'paid' as const, ageDays: 5 },
+    { id: 'demo_buyer_4', name: 'Sam Ortiz', tier: 'Source', amount: 149, commission: 15, status: 'pending' as const, ageDays: 1 / 3 },
+  ];
+  const b = buyers[i];
+  return [{
+    id: `tx_${i + 1}`, productId: p.id, productName: p.name, buyerId: b.id, buyerName: b.name,
+    sellerId: seller.id, sellerName: seller.name, tier: b.tier, amount: b.amount,
+    commission: b.commission, status: b.status, ts: Date.now() - 1000 * 60 * 60 * 24 * b.ageDays,
+  }];
+});
 
 export const useStore = create<State>((set, get) => ({
   user: null,
   threads: seedThreads,
   messages: seedMessages,
   transactions: seedTxns,
-  listings: PRODUCTS.map((p, i) => ({ ...p, ownerId: SELLER_USERS[p.seller.name].id, status: 'live' as const })),
+  listings: PRODUCTS.map((p, i) => ({ ...p, ownerId: sellerFor(p, i).id, status: 'live' as const })),
   activeReps: [],
 
   signIn: (u) => {
@@ -399,8 +440,14 @@ export const useStore = create<State>((set, get) => ({
         set({ listings });
       }
     } catch (e) {
-      console.error("Session restore failed", e);
       api.clearTokens();
+      // Recover gracefully from stale/invalid JWTs by falling back to public catalog.
+      try {
+        const listings = await api.listings();
+        set({ user: null, listings });
+      } catch {
+        // ignore secondary failure; UI can retry via subsequent flows
+      }
     }
   },
 
@@ -408,7 +455,17 @@ export const useStore = create<State>((set, get) => ({
     if (USE_MOCKS) return;
     try {
       const user = get().user;
-      const listings = await api.listings();
+      let listings = await api.listings();
+      // Sellers/admins also need their non-live items (draft / in-review) which
+      // the public catalog omits — merge owner=me in, deduped by id.
+      if (user && (user.role === 'seller' || user.role === 'admin')) {
+        try {
+          const mine = await api.listings('?owner=me');
+          const byId = new Map<string, Listing>();
+          for (const l of [...listings, ...mine]) byId.set(l.id, l);
+          listings = Array.from(byId.values());
+        } catch { /* non-fatal */ }
+      }
       set({ listings });
       if (user) {
         const [threads, txns] = await Promise.all([
@@ -447,7 +504,8 @@ export function catalogProducts(listings: Listing[]): Product[] {
 }
 
 export function useCatalogProducts(): Product[] {
-  return useStore((s) => catalogProducts(s.listings));
+  const listings = useStore((s) => s.listings);
+  return useMemo(() => catalogProducts(listings), [listings]);
 }
 
 export function activeRepsForBuyer(buyerId: string, threads: Thread[]) {
