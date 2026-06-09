@@ -55,9 +55,30 @@ SERVICES: dict[str, tuple[str, int]] = {
     "notifications":   ("backend.services.notifications.app:app", 8005),
     "hosting":         ("backend.services.hosting.app:app",       8006),
     "reviews":         ("backend.services.reviews.app:app",       8007),
+    "chats":           ("backend.services.chats.app:app",         8008),
     "ai-orchestrator": ("backend.ai.app:app",                     8010),
 }
 AI_WORKERS = 2  # backend.ai.workers stream consumers
+
+
+def _env(key: str, default: str) -> str:
+    """Cheap .env reader (no dependency) for orchestration decisions."""
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if line.startswith(key + "="):
+                return line.split("=", 1)[1].strip()
+    return default
+
+
+def _is_sqlite() -> bool:
+    return _env("DATABASE_URL", "sqlite+aiosqlite:///./vitrine.db").startswith("sqlite")
+
+
+def _is_monolith() -> bool:
+    # In-memory event bus only works in ONE process -> run the gateway monolith
+    # (it includes every router + wires the agent pipeline).
+    return _env("EVENT_BUS", "memory") == "memory"
 
 # ----- pretty logging ---------------------------------------------------------
 COLORS = ["36", "32", "33", "35", "34", "31", "92", "93", "94", "95", "96"]
@@ -92,32 +113,26 @@ def have(binname: str) -> bool:
 
 def preflight() -> None:
     info("Preflight: checking native prerequisites...")
+    zero_dep = _is_sqlite() and _is_monolith()
+    if zero_dep:
+        ok("mode: SQLite + in-memory bus (no Postgres/Redis needed)")
     missing = []
-    checks = {
-        "python3": sys.version_info >= (3, 11),
-        "node": have("node"),
-        "npm": have("npm"),
-        "psql": have("psql"),
-        "redis-cli": have("redis-cli"),
-    }
+    checks = {"python3": sys.version_info >= (3, 11), "node": have("node"), "npm": have("npm")}
     for name, present in checks.items():
         (ok if present else warn)(f"{name}: {'found' if present else 'MISSING'}")
         if not present:
             missing.append(name)
 
-    # reachability (best-effort)
-    if have("redis-cli"):
-        r = subprocess.run(["redis-cli", "ping"], capture_output=True, text=True)
-        if "PONG" in r.stdout:
-            ok("redis: reachable")
-        else:
-            warn("redis: not responding — start it (e.g. `brew services start redis`)")
-    if have("pg_isready"):
-        r = subprocess.run(["pg_isready"], capture_output=True, text=True)
-        if r.returncode == 0:
-            ok("postgres: reachable")
-        else:
-            warn("postgres: not ready — start it (e.g. `brew services start postgresql`)")
+    # Postgres/Redis only matter when NOT in zero-dep mode.
+    if not zero_dep:
+        if have("redis-cli"):
+            r = subprocess.run(["redis-cli", "ping"], capture_output=True, text=True)
+            (ok if "PONG" in r.stdout else warn)(
+                "redis: reachable" if "PONG" in r.stdout else "redis: not responding")
+        if have("pg_isready"):
+            r = subprocess.run(["pg_isready"], capture_output=True, text=True)
+            (ok if r.returncode == 0 else warn)(
+                "postgres: reachable" if r.returncode == 0 else "postgres: not ready")
 
     if missing:
         warn(f"Missing tools: {', '.join(missing)} — install them, then re-run.")
@@ -148,26 +163,31 @@ def ensure_venv() -> None:
 
 
 def setup_database(fresh: bool, seed: bool) -> None:
-    if not (BACKEND / "migrations").exists():
-        warn("backend/migrations not found — skipping DB setup (no Alembic yet).")
+    if not (BACKEND / "shared" / "db_setup.py").exists():
+        warn("backend/shared/db_setup.py not found — skipping DB setup.")
         return
-    info("Setting up database (create + pgvector + migrate)...")
-    # These helpers are expected to live in the backend per backend.md.
-    db_script = BACKEND / "shared" / "db_setup.py"
     try:
-        if fresh and db_script.exists():
-            subprocess.check_call([str(VENV_PY), str(db_script), "--drop-create"])
-        elif db_script.exists():
-            subprocess.check_call([str(VENV_PY), str(db_script), "--ensure"])
-        subprocess.check_call([str(VENV_PY), "-m", "alembic", "upgrade", "head"],
-                              cwd=str(BACKEND))
-        ok("Migrations applied (pgvector enabled).")
-        if seed and (BACKEND / "seed.py").exists():
-            subprocess.check_call([str(VENV_PY), str(BACKEND / "seed.py")])
+        if _is_sqlite():
+            # SQLite: create_all is the schema (no Alembic, no createdb/pgvector).
+            info("Setting up SQLite database (create_all)...")
+            arg = "--drop-create" if fresh else "--ensure"
+            subprocess.check_call([str(VENV_PY), "-m", "backend.shared.db_setup", arg],
+                                  cwd=str(ROOT))
+            ok("SQLite schema ready.")
+        else:
+            # Postgres: run Alembic migrations (and assume DB/pgvector exist).
+            info("Setting up Postgres database (alembic upgrade)...")
+            if fresh:
+                subprocess.check_call([str(VENV_PY), "-m", "backend.shared.db_setup",
+                                       "--drop-create"], cwd=str(ROOT))
+            subprocess.check_call([str(VENV_PY), "-m", "alembic", "upgrade", "head"],
+                                  cwd=str(BACKEND))
+            ok("Migrations applied.")
+        if seed:
+            subprocess.check_call([str(VENV_PY), "-m", "backend.seed"], cwd=str(ROOT))
             ok("Demo data seeded.")
     except subprocess.CalledProcessError as e:
-        warn(f"DB setup step failed ({e}). Check DATABASE_URL in .env and that "
-             "Postgres + pgvector are installed.")
+        warn(f"DB setup step failed ({e}). Check DATABASE_URL in .env.")
 
 
 def ensure_frontend() -> None:
@@ -293,12 +313,20 @@ def main() -> int:
     ap.add_argument("--seed", action="store_true", help="seed demo data")
     ap.add_argument("--fresh-db", action="store_true", help="drop & recreate DB first")
     ap.add_argument("--only", default="", help="comma list of services to run")
+    ap.add_argument("--all", action="store_true",
+                    help="force every service as separate processes (needs EVENT_BUS=redis)")
     ap.add_argument("--no-frontend", action="store_true")
     ap.add_argument("--setup-only", action="store_true", help="bootstrap, don't launch")
     ap.add_argument("--skip-bootstrap", action="store_true", help="launch only")
     args = ap.parse_args()
 
     selected = [s.strip() for s in args.only.split(",") if s.strip()]
+    # Monolith default: in-memory bus only works in one process, so run just the
+    # gateway (it includes every router + wires the agent pipeline).
+    if not selected and not args.all and _is_monolith():
+        selected = ["gateway"]
+        info("Monolith mode: launching the gateway only (set EVENT_BUS=redis + --all "
+             "to run microservices separately).")
 
     preflight()
     if not args.skip_bootstrap:

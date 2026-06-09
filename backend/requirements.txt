@@ -1,0 +1,33 @@
+# Vitrine backend — Python 3.11+
+# Pinned loosely for the hackathon; tighten before production.
+
+# web
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+gunicorn==23.*
+python-multipart==0.0.*          # file uploads (README/screenshots)
+sse-starlette==2.*               # Server-Sent Events (Concierge / negotiate)
+
+# data
+sqlalchemy[asyncio]==2.0.*
+aiosqlite==0.20.*                # SQLite async driver (DEFAULT for now)
+asyncpg==0.30.*                  # Postgres async driver (LATER)
+alembic==1.14.*
+
+# validation / settings
+pydantic==2.*
+pydantic-settings==2.*
+email-validator==2.*
+
+# auth / security
+pyjwt==2.*
+passlib==1.7.*                   # pbkdf2_sha256 (pure-Python; portable).
+# For bcrypt in prod, add: bcrypt<4.1  (passlib 1.7 is incompatible with bcrypt>=4.1)
+
+# infra (optional in dev — EVENT_BUS/CACHE can be 'memory')
+redis==5.*
+
+# ai
+openai==1.*
+httpx==0.27.*                    # repo fetch + outbound calls
+tiktoken==0.8.*                  # token counting for budget meter

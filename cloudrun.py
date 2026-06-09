@@ -42,6 +42,7 @@ SERVICES: dict[str, tuple[str, int]] = {
     "notifications":   ("backend.services.notifications.app:app", 8005),
     "hosting":         ("backend.services.hosting.app:app",       8006),
     "reviews":         ("backend.services.reviews.app:app",       8007),
+    "chats":           ("backend.services.chats.app:app",         8008),
     "ai-orchestrator": ("backend.ai.app:app",                     8010),
 }
 

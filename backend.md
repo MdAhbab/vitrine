@@ -431,3 +431,321 @@ ALLOWED_PREVIEW_HOSTS=vercel.app,preview.vitrine.app
 ```
 
 > See [AGENTS.md](./AGENTS.md) for agent behaviour and HCD mobile design guidelines.
+
+---
+---
+
+# Part II — Implementation Plan (added)
+
+> This part is the build guide for the **existing React frontend** + the
+> **scaffolded `backend/`**. It covers (16) every frontend↔backend wire, (17)
+> the SQLite-now/Postgres-later database plan, (18) a phased step-by-step plan,
+> and (19) a map of the scaffold. The first AI to pick this up should work
+> phase-by-phase; each phase is independently runnable.
+
+## 16. Frontend ↔ Backend wiring
+
+### 16.0 Reconciliation (frontend is the source of truth)
+The built frontend fixes a few choices the original plan left open. The backend
+scaffold already follows these — keep them:
+
+| Topic | Decision (matches `frontend/src/app/lib`) |
+|---|---|
+| Roles | `buyer · seller · admin` (use **seller**, not "developer") |
+| Seller plans | `free · studio · atelier · maison` (not free/monthly_pro) |
+| Commission % | `12 / 8 / 5 / 3` by plan; student-free = 7.5 — **runtime-editable** via `admin_configs.fees` |
+| Listing lookup | by **slug** (`/p/:slug`) for detail; id for mutations |
+| Chat = "thread" | frontend says `threadId`; backend table is `chats.id` → serializer maps `chat.id → threadId` |
+| Messaging | dedicated **chats** service (gateway proxies `/chats/*` to it) |
+| Money | dollars on the wire (frontend), **cents** in the DB (`*_cents`) |
+| AdminConfig | one object assembled from keyed `admin_configs` rows |
+
+### 16.1 The frontend integration layer (to add)
+The frontend currently runs **100% on the in-memory Zustand store + mock data**
+(no network calls). Wire it without rewriting the UI:
+
+1. **Add `frontend/.env`** (see `frontend/.env.example`):
+   ```ini
+   VITE_API_BASE=http://localhost:8000      # gateway (monolith) in dev
+   VITE_USE_MOCKS=false                       # true = keep current mock store
+   ```
+2. **Add `frontend/src/app/lib/api.ts`** — a typed client (ready to paste below).
+3. **Refactor `store.ts` actions** to call `api.*` when `VITE_USE_MOCKS !== 'true'`,
+   otherwise keep the current local behaviour. Keep the store's *types* — they are
+   already the response contract (the backend serializers mirror them).
+4. **Token storage:** persist `access_token`/`refresh_token` in `localStorage`;
+   `api.ts` attaches `Authorization: Bearer` and refreshes on 401.
+
+```ts
+// frontend/src/app/lib/api.ts  — drop-in integration layer
+const BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
+export const USE_MOCKS = (import.meta.env.VITE_USE_MOCKS ?? 'true') === 'true';
+
+const tok = {
+  get access() { return localStorage.getItem('vitrine_access'); },
+  get refresh() { return localStorage.getItem('vitrine_refresh'); },
+  set(a: string, r: string) {
+    localStorage.setItem('vitrine_access', a);
+    localStorage.setItem('vitrine_refresh', r);
+  },
+  clear() { localStorage.removeItem('vitrine_access'); localStorage.removeItem('vitrine_refresh'); },
+};
+
+async function req<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(tok.access ? { Authorization: `Bearer ${tok.access}` } : {}),
+      ...(init.headers ?? {}),
+    },
+  });
+  if (res.status === 401 && retry && tok.refresh) {
+    // TODO: POST /auth/refresh, store new tokens, replay once
+  }
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.status === 204 ? (undefined as T) : res.json();
+}
+
+export const api = {
+  // auth
+  signup: (b: any) => req('/auth/signup', { method: 'POST', body: JSON.stringify(b) }),
+  login: (b: any) => req('/auth/login', { method: 'POST', body: JSON.stringify(b) }),
+  adminLogin: (b: any) => req('/auth/admin/login', { method: 'POST', body: JSON.stringify(b) }),
+  me: () => req('/users/me'),
+  setTokens: tok.set, clearTokens: tok.clear,
+
+  // catalog
+  listings: (qs = '') => req<any[]>(`/listings${qs}`),
+  listing: (slug: string) => req(`/listings/${slug}`),
+  createListing: (b: any) => req('/listings', { method: 'POST', body: JSON.stringify(b) }),
+  intake: (id: string, b: any) => req(`/listings/${id}/intake`, { method: 'POST', body: JSON.stringify(b) }),
+  updateListing: (id: string, b: any) => req(`/listings/${id}`, { method: 'PATCH', body: JSON.stringify(b) }),
+  deleteListing: (id: string) => req(`/listings/${id}`, { method: 'DELETE' }),
+
+  // commerce
+  checkout: (b: any) => req('/checkout', { method: 'POST', body: JSON.stringify(b) }),
+  subscribe: (tier: string) => req('/subscriptions/subscribe', { method: 'POST', body: JSON.stringify({ tier }) }),
+  payouts: () => req('/payouts'),
+
+  // chats / negotiation
+  chats: () => req<any[]>('/chats'),
+  messages: (id: string) => req<any[]>(`/chats/${id}/messages`),
+  send: (id: string, body: string, as_agent = false) =>
+    req(`/chats/${id}/messages`, { method: 'POST', body: JSON.stringify({ body, as_agent }) }),
+  startNegotiation: (b: any) => req('/chats/negotiate/start', { method: 'POST', body: JSON.stringify(b) }),
+  negotiate: (chat_id: string) => req('/ai/negotiate', { method: 'POST', body: JSON.stringify({ chat_id }) }),
+
+  // ai
+  pricing: (listing_id: string) => req('/ai/pricing', { method: 'POST', body: JSON.stringify({ listing_id }) }),
+  estimateFeature: (b: any) => req('/ai/estimate-feature', { method: 'POST', body: JSON.stringify(b) }),
+  featureRequest: (b: any) => req('/feature-requests', { method: 'POST', body: JSON.stringify(b) }),
+
+  // misc
+  notifications: () => req<any[]>('/notifications'),
+  reviews: (listingId: string) => req(`/listings/${listingId}/reviews`),
+  health: (url: string) => req(`/hosting/health?url=${encodeURIComponent(url)}`),
+
+  // admin
+  adminConfig: () => req('/admin/config'),
+  patchAdminConfig: (b: any) => req('/admin/config', { method: 'PATCH', body: JSON.stringify(b) }),
+  agentRuns: () => req('/admin/agent-runs'),
+};
+
+// Concierge SSE (POST + stream). Use fetch + ReadableStream reader.
+export async function conciergeStream(query: string, onChunk: (c: any) => void) {
+  const res = await fetch(`${BASE}/ai/concierge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json',
+               ...(tok.access ? { Authorization: `Bearer ${tok.access}` } : {}) },
+    body: JSON.stringify({ query, history: [] }),
+  });
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    for (const line of buf.split('\n\n')) {
+      const m = line.match(/^data: (.*)$/m);
+      if (m) onChunk(JSON.parse(m[1]));
+    }
+    buf = buf.slice(buf.lastIndexOf('\n\n') + 2);
+  }
+}
+```
+
+### 16.2 Every wire (store action / page / modal → endpoint)
+> `{slug}`/`{id}` substituted at call time. Dollars↔cents handled by serializers.
+
+| Frontend touchpoint (`lib`/page/component) | Action | HTTP | Auth |
+|---|---|---|---|
+| `store.signIn` / `Auth.tsx` (login) | login | `POST /auth/login` → tokens → `GET /users/me` | public |
+| `Auth.tsx` (signup) | register | `POST /auth/signup` → tokens | public |
+| `Auth.tsx` (admin mode) | admin login | `POST /auth/admin/login` | public |
+| `store.signOut` | clear tokens | — (client) | — |
+| `store.toggleStudent` | verify student | `POST /users/verify-student` | buyer/seller |
+| `Home.tsx` rails | curated lists | `GET /listings?sort=vitrine_score&limit=…` | public |
+| `Browse.tsx` | filtered grid | `GET /listings?category=&tag=&q=&sort=` | public |
+| `Browse.tsx` search box | search | `GET /search?q=` | public |
+| `ProductPage.tsx` | detail | `GET /listings/{slug}` | public |
+| `ProductPage.tsx` reviews | reviews | `GET /listings/{id}/reviews` | public |
+| `PreviewFrame.tsx` | demo health | `GET /hosting/health?url=` (optional) | public |
+| `ConciergePanel.tsx` | AI search | `POST /ai/concierge` (SSE) | optional |
+| `Sell.tsx` step 1 | create draft | `POST /listings` | seller |
+| `Sell.tsx` step 1 import | repo/README intake | `POST /listings/{id}/intake` | seller |
+| `Sell.tsx` step 2 edits | save fields | `PATCH /listings/{id}` | seller |
+| `Sell.tsx` step 4 | price & pitch | `POST /ai/pricing` | seller |
+| `ListingEditor.tsx` / `store.upsertListing` | update | `PATCH /listings/{id}` | seller |
+| `store.deleteListing` | delete | `DELETE /listings/{id}` | seller |
+| `CheckoutModal` / `store.recordTransaction` | buy / advance | `POST /checkout` → `order.paid` | buyer |
+| `RequestFeaturesModal` | feature + AI quote | `POST /feature-requests` + `POST /ai/estimate-feature` | buyer |
+| `BargainModal` / `store.startThread(agent)` | dispatch AI rep | `POST /chats/negotiate/start` (max 2) | buyer |
+| `store.agentReply` | rep's next msg | `POST /ai/negotiate {chat_id}` | buyer |
+| `Inbox.tsx` / `store.sendMessage` | send message | `POST /chats/{id}/messages` | any party |
+| `Inbox.tsx` | list threads / history | `GET /chats` · `GET /chats/{id}/messages` | any party |
+| `Pricing.tsx` / `store.setUserPlan` | subscribe | `POST /subscriptions/subscribe` | seller |
+| `SellerDashboard.tsx` | my listings / orders | `GET /listings?owner=me` · `GET /orders?role=seller` | seller |
+| `SellerDashboard` payouts | payouts | `GET /payouts` · `POST /payouts/request` | seller |
+| `OrderDetail.tsx` deliver | deliver app | `POST /orders/{id}/deliver` | seller |
+| `BuyerDashboard.tsx` | orders / notifications | `GET /orders?role=buyer` · `GET /notifications` | buyer |
+| `AdminDashboard` / `CuratorConsole` | config | `GET /admin/config` · `PATCH /admin/config` | admin |
+| `AdminDashboard` api keys | rotate keys | `PATCH /admin/config {apiKeys}` | admin |
+| `AdminDashboard` cost meter | agent runs | `GET /admin/agent-runs` | admin |
+| `AdminDashboard` moderation | queue/decision/chats | `GET /admin/verification-queue` · `POST /admin/listings/{id}/decision` · `GET /admin/chats` | admin |
+
+### 16.3 Auth & CORS notes
+- Gateway sets CORS `allow_origins=[FRONTEND_ORIGIN]`. In dev that's
+  `http://localhost:5173`; keep `VITE_API_BASE=http://localhost:8000`.
+- In prod, nginx serves the SPA and proxies `/api/*`→gateway, so set
+  `VITE_API_BASE=/api`. (cloudrun already strips `/api`.)
+- Concierge/negotiate streams pass through nginx with buffering off (already in
+  the nginx template, §14).
+
+---
+
+## 17. Database plan — SQLite now → Postgres later
+
+**One portable model set** (`backend/shared/models.py`) runs on both engines.
+Switch by changing only `DATABASE_URL`.
+
+### 17.1 Why it's portable
+| Concern | SQLite (now) | Postgres (later) | How |
+|---|---|---|---|
+| Driver | `sqlite+aiosqlite` | `postgresql+asyncpg` | `DATABASE_URL` only |
+| Primary keys | `String(32)` uuid hex | same | `PK` mixin |
+| Money | integer **cents** | same | `*_cents` columns |
+| JSON/JSONB | `JSON`→TEXT | `JSON`→JSONB | SQLAlchemy generic `JSON` |
+| Enums | plain `String` + Pydantic validation | same (or native ENUM) | avoids fragile SQLite ALTERs |
+| Timestamps | `DateTime` (UTC) | `timestamptz` | `default=_now` |
+| Vectors | JSON float-array + brute-force cosine | `pgvector` + HNSW index | `ai/vectorstore.py` factory |
+| Schemas | single file, flat tables | (optional) schema-per-service | not required |
+
+### 17.2 Zero-dependency dev
+With the defaults the **whole stack runs with no Postgres and no Redis**:
+- `DATABASE_URL=sqlite+aiosqlite:///./vitrine.db`
+- `EVENT_BUS=memory` (in-process asyncio pub/sub) — works because dev runs the
+  **gateway monolith** (all services in one process; events stay in-process).
+- `CACHE=memory`.
+- `OPENAI_API_KEY=` empty → `ai/client.py` returns deterministic **stubs** so
+  agents/Concierge "work" offline; set the key to go live.
+
+### 17.3 Tables (as built in the scaffold)
+`users · listings · listing_fields · listing_tiers · listing_media ·
+listing_embeddings · orders · deliveries · payouts · subscriptions ·
+feature_requests · chats · chat_messages · negotiations · reviews ·
+notifications · agent_runs · ai_cache · admin_configs · audit_log`.
+The intake **form sheet** persists as `listing_fields` rows (`section.key`,
+`source`, `confidence`) and is composed into the frontend `spec` by
+`catalog/serializers.py`. `FORM_SCHEMA` (`shared/form_schema.py`) is the single
+source of truth for both intake and the Sell wizard.
+
+### 17.4 Migrating to Postgres (when ready)
+1. `createdb vitrine` + `CREATE EXTENSION vector;`
+2. Set `DATABASE_URL=postgresql+asyncpg://…`, `EVENT_BUS=redis`, `CACHE=redis`.
+3. `cd backend && alembic revision --autogenerate -m "init" && alembic upgrade head`
+   (Alembic env already converts the async URL to sync + `render_as_batch`).
+4. Swap `listing_embeddings.embedding` JSON→`vector(1536)` in that migration and
+   implement `PgVector` in `ai/vectorstore.py` (the factory picks it by dialect).
+5. Implement the Redis `EventBus`/`Cache` branches (already stubbed) and run the
+   services as separate processes (or keep the monolith — your call).
+No model or endpoint code changes required.
+
+---
+
+## 18. Step-by-step implementation plan
+
+> Status legend: ✅ done in scaffold · ◐ partial / harden · ▢ to build. Run after each phase.
+
+### Phase 0 — Boot the scaffold ✅
+- `python run.py local` (or `uvicorn backend.gateway.app:app --reload`).
+- Gateway auto-creates SQLite tables; `python -m backend.seed` adds demo data.
+- Verify `GET /health`, `GET /listings`, `POST /auth/signup`, `POST /auth/login`.
+
+### Phase 1 — Auth + catalog read (vertical slice) ✅/◐
+- ✅ signup/login/admin-login/me; ✅ `GET /listings`, `GET /listings/{slug}`.
+- ◐ token refresh on 401; ownership checks; pagination/facets; `owner=me` filter.
+- **Wire FE:** add `api.ts` + `.env`; switch `Auth`, `Home`, `Browse`,
+  `ProductPage` off mocks. *Done when the storefront renders from the DB.*
+
+### Phase 2 — AI publishing pipeline ▢ (core differentiator)
+- Implement real **tool handlers** (`ai/tools/`): `fetch_repo_tree`, `read_readme`,
+  `detect_stack`, `embed_text`, `write_listing_fields`, `check_demo_health`.
+- Flesh out **Repo-Intake** (heuristics → 1 LLM call → fill `listing_fields` +
+  embed), **Verification** (verdict + `listing.verified/flagged`), **Curation**
+  (real signals + cached `vision_score_ui`).
+- Implement the multi-tool loop + retries in `agents/base.run_agent`.
+- Real **Concierge** streaming + hybrid search (`vector_store.search`).
+- **Wire FE:** `Sell.tsx` intake/edit/submit; `ConciergePanel` SSE.
+- ◐ Budget guard persists spend via `agent_runs`; Redis result cache.
+
+### Phase 3 — Commerce, chat, reviews ▢
+- Orders: `deliver`, ledger, payouts, subscriptions; signed delivery links.
+- Feature-requests CRUD + quote/approve flow (uses `feature_estimator`).
+- Reviews create (verified-purchase) → rating rollup → `review.created` re-score.
+- Chats: already working; add admin moderation `GET /admin/chats`.
+- **Wire FE:** `CheckoutModal`, `RequestFeaturesModal`, `BargainModal`/`Inbox`,
+  `Pricing`, dashboards (seller/buyer/admin), `AdminDashboard` config + cost meter.
+
+### Phase 4 — Hardening & Postgres ▢
+- Rate limiting (`/ai/*` stricter), CSP/sandbox on previews, audit log everywhere.
+- Switch to Postgres + pgvector + Redis (§17.4); implement Redis bus/cache.
+- Real Stripe provider + signed webhooks.
+
+### Phase 5 — Managed preview hosting ▢ (see §14)
+- `hosting` deploy worker: clone → native build/run under its own systemd unit →
+  `*.preview.vitrine.app` vhost → duration-billed teardown timer.
+
+---
+
+## 19. Scaffold map (what's already there)
+
+```
+backend/
+├── shared/          settings, db, models(all tables), events(memory|redis),
+│                    cache, security(JWT/RBAC), form_schema, ids, schemas/*,
+│                    db_setup.py
+├── gateway/app.py   MONOLITH: includes every router + lifespan(create_all +
+│                    wires event handlers). Run this for SQLite dev.
+├── services/        identity(✅auth) · catalog(✅read, ▢write) · search(basic) ·
+│                    orders(✅mock checkout +providers) · notifications(✅order.paid)
+│                    · hosting(url/health) · reviews(read) · chats(✅msg+negotiate)
+├── ai/              client(stub-safe) · budget · vectorstore(sqlite brute-force)
+│                    · tools(registry+stubs) · agents/(7 runners) · workers ·
+│                    app(intake/concierge SSE/pricing/negotiate/estimate + admin)
+├── seed.py          demo admin/maker/buyer + listings + default admin_config
+├── migrations/      Alembic (Postgres-ready) · alembic.ini
+└── requirements.txt
+```
+**Run the monolith (fastest path):**
+```bash
+cd backend && pip install -r requirements.txt
+cd .. && uvicorn backend.gateway.app:app --reload --port 8000   # tables auto-create
+python -m backend.seed                                          # demo data
+# open http://localhost:8000/health and /listings
+```
+Demo logins: `admin@vitrine.io/admin` · `maker@vitrine.io/maker` · `buyer@vitrine.io/buyer`.
+
+> Each stubbed endpoint raises `501` or returns a typed placeholder and is tagged
+> `TODO Phase N` in code, so the next AI can grep `TODO Phase` and work the list.
