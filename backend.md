@@ -137,7 +137,8 @@ chats(id pk, buyer_id fk users, seller_id fk users, listing_id fk listings, crea
 chat_messages(id pk, chat_id fk chats, sender_id fk users, text text, is_agent_rep bool default false, created_at)
 
 negotiations(id pk, chat_id fk chats, buyer_id fk users, status enum[active, closed], 
-             budget_cents int, target_cents int, active_rep_count_at_creation int, created_at)
+             budget_cents int, target_cents int, active_rep_count_at_creation int, 
+             buyer_readme_context text, created_at)
 
 -- reviews
 reviews(id pk, listing_id fk, buyer_id fk, rating int, body,
@@ -148,6 +149,7 @@ agent_runs(id pk, agent, listing_id fk null, trigger_event, input_hash,
            model, tokens_in, tokens_out, cost_usd, latency_ms,
            verdict jsonb, confidence numeric, status, created_at)
 ai_cache(key pk, value jsonb, created_at, ttl)   -- also mirrored in Redis
+admin_configs(key pk, value text, description text, is_encrypted bool default false, updated_at)
 audit_log(id pk, actor, action, target, meta jsonb, created_at)
 ```
 
@@ -301,6 +303,8 @@ GET    /admin/verification-queue
 POST   /admin/listings/{id}/decision
 GET    /admin/agent-runs                  # cost meter + observability
 GET    /admin/chats                       # view all user chats (moderation)
+GET    /admin/config                      # retrieve late-stage curator configurations & alternative keys
+PATCH  /admin/config                      # edit prompts, rotate API keys at runtime
 ```
 
 ---
@@ -426,4 +430,4 @@ STRIPE_WEBHOOK_SECRET=
 ALLOWED_PREVIEW_HOSTS=vercel.app,preview.vitrine.app
 ```
 
-> See [AGENTS.md](./AGENTS.md) for agent behaviour and [frontend.md](./frontend.md) for the client that consumes these APIs.
+> See [AGENTS.md](./AGENTS.md) for agent behaviour and HCD mobile design guidelines.

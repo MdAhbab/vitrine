@@ -20,6 +20,7 @@
 5. **Confidence-scored.** Agents attach a `confidence` (0–1) to each field/verdict. Low confidence → surfaced to a human (seller or admin).
 6. **Observable.** Every run logs: agent, trigger event, input hash, tokens, cost, latency, tool calls, verdict, confidence → `agent_runs` table + admin cost meter.
 7. **Safe by default.** No agent has write access outside its declared tools. No agent can publish a listing on its own — it can only *recommend* a state transition that the Catalog service applies.
+8. **Admin-Configurable at Runtime.** Every agent loads instructions, system prompts, API endpoints, model parameters, and API keys dynamically from the database config table. This allows the administrator/curator to make last-minute prompt overrides, rotate keys, or change LLM routing configurations instantly without restarting the service.
 
 ---
 
@@ -151,10 +152,11 @@
 **Triggers:** Buyer activates negotiation on a listing.
 
 **Workflow:**
-1. **Load Context:** Retrieve listing details, buyer-defined constraints (target budget, maximum budget, timeline requirements), previous messages, and **active/past order details and purchase history** for this specific buyer.
-2. **Formulate Negotiation Strategy:** Evaluate the listing's market comps, seller's tier/rating, and buyer's order history to determine a reasonable offer and contextual arguments (e.g., volume discount for returning buyers).
-3. **Draft Message:** Call `draft_negotiation_message` with order details and historical context to generate the next response in the chat thread.
-4. **Respond to Seller:** Post the message to the chat channel. The seller can reply directly, triggering the agent to evaluate the response and draft a counter-offer.
+1. **Submit Product Context (Bargain Form)**: Buyer clicks "Ask AI to Bargain", which opens a minimal form to submit a README or extra product information. The AI Representative reads, parses, and digests this context.
+2. **Load Context:** Retrieve listing details, buyer-defined constraints (target budget, maximum budget, timeline requirements), previous messages, buyer-submitted README/product context, and **active/past order details and purchase history** for this specific buyer.
+3. **Formulate Negotiation Strategy:** Evaluate the listing's market comps, seller's tier/rating, buyer's order history, and the buyer-provided README/product specifications to determine a reasonable offer and contextual arguments (e.g., volume discount for returning buyers).
+4. **Draft Message:** Call `draft_negotiation_message` with order details and historical context to generate the next response in the chat thread.
+5. **Respond to Seller:** Post the message to the chat channel. The seller can reply directly, triggering the agent to evaluate the response and draft a counter-offer.
 
 **Tools:** `get_listing`, `draft_negotiation_message`, `market_comps`.
 

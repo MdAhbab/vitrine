@@ -59,7 +59,7 @@ Three things make it different:
 
 1. **Preview-first listings.** Every product card opens into a sandboxed, embedded **live preview** (developer-supplied `*.vercel.app` link today; Vitrine-managed native hosting as a paid tier). A health-checker keeps demos honest.
 2. **Agentic publishing.** A fleet of OpenAI agents reads the repo/README, fills the technical form, verifies the submission, ranks it, and helps the seller price & pitch it.
-3. **Boutique, premium experience.** A gallery, not a flea market — curated sections, editorial layout, dark/light, slow elegant motion. (See [frontend.md](./frontend.md).)
+3. **Boutique, mobile-first experience.** A mobile-responsive gallery designed with Human-Centered Design (HCD) principles — optimized layouts for all viewports, intuitive gesture touch targets, clean readable typography, and a balanced dark/light mode.
 
 ### The commercial & business model (seller tiers & commissions)
 Vitrine supports high-value listings (up to **$15,000+** for complex software/complete websites) and operates on a tiered seller subscription and platform commission model:
@@ -101,7 +101,7 @@ Vitrine supports high-value listings (up to **$15,000+** for complex software/co
 1. Browse the gallery (curated sections, filters, sorts) or ask the **Buyer Concierge**: *"React dashboard with Stripe, under $40, live demo."*
 2. Open a listing → **run the live preview** in a sandboxed device frame.
 3. Read AI-summarized spec + verified badges + reviews + Vitrine Score, plus the product's **SDLC phase, problem statement, solution methodology, and discussions board**.
-4. **Negotiate & Talk**: Click the "Ask AI to Bargain" button to spawn an **AI Representative** to talk/negotiate with the seller/developer on your behalf. 
+4. **Negotiate & Talk**: Click the "Ask AI to Bargain" button. This opens a minimal form to submit a README or extra product information. The AI reads this context, understands the product, and acts as a representative to bargain/negotiate with the seller/developer on your behalf.
    - *Constraint*: Only logged-in buyers can have **up to 2 active representatives** at a time.
    - *Context-Awareness*: The AI negotiator reads the buyer's order details and past transaction context to negotiate custom terms.
 5. **Purchased Products Library**: View all bought items in a library workspace, tap cards to open full product specifications/live previews, and access a detailed **Order Details Page** to monitor delivery milestones.
@@ -114,6 +114,7 @@ Vitrine supports high-value listings (up to **$15,000+** for complex software/co
 3. Review the Verification Agent's queue (approve overrides, handle flags).
 4. Audit the platform's transactions ledger, tracking high-value payouts and collected commissions.
 5. Monitor agent runs, costs, and the event stream.
+6. **Configure Instructions & Keys**: Open the Admin Settings panel to configure prompt templates, routing details, custom AI models, and manage alternative third-party AI API keys (Google, Anthropic, OpenAI, etc.) down to the last-minute details.
 
 ---
 
@@ -125,12 +126,14 @@ Vitrine supports high-value listings (up to **$15,000+** for complex software/co
 - **Agentic intake & verification** — GitHub crawl / README upload → auto-filled spec + quality/plausibility checks.
 - **Vitrine Score** — AI + heuristic ranking (recency, completeness, reviews, UI beauty, demo health, engagement).
 - **Buyer Concierge** — semantic search + chat assistant + compare.
-- **AI Negotiator (Buyer Representative)** — Buyers can spawn an agent to negotiate deals on their behalf (limit of 2 concurrent active reps).
+- **AI Negotiator (Buyer Representative)** — Buyers can spawn an agent (which reads a custom-submitted README/product info) to negotiate deals on their behalf (limit of 2 concurrent active reps).
 - **Custom Feature Requests** — Buyers can request additional features; AI automatically estimates development cost.
 - **Direct Messaging** — Buyer-seller chat channels with an Admin panel view for auditing and moderation.
-- **Stakeholder Dashboards** — Tailored portals for Buyers (orders, chat inbox, active reps), Sellers (inventory, subscription/tier management, sales analytics), and Admins (verification queue, chat logs, ledger, cost meter).
+- **Stakeholder Dashboards** — Tailored portals for Buyers (orders, chat inbox, active reps), Sellers (inventory, subscription/tier management, sales analytics), and Admins (verification queue, chat logs, ledger, cost meter, and configuration console).
+- **Admin Configuration Settings Panel** — Manage alternative API keys (e.g. dynamic key rotation), update system instructions/prompts, configure dynamic LLM routings, and override platform variables at runtime.
 - **Payment Gateway** — Secured checkout supporting high-value transactions ($15,000+), advance milestone payments, and monthly subscriptions.
 - **Legal Footer Pages** — Dedicated pages for Terms of Service, Privacy Policy, and Disclaimer.
+- **HCD Mobile Responsiveness** — Optimized Human-Centered Design layout for mobile devices, touch targets, and offline fallback guidelines.
 
 ### Subsidiary / supporting features
 - **Seller Subscription & Commission System** — Handling free/paid accounts, student discounts, and platform cut rate.
@@ -141,6 +144,7 @@ Vitrine supports high-value listings (up to **$15,000+** for complex software/co
 - **Promotion / featured slots** (student-discounted).
 - **Webhooks** for sellers (sale, advance, review).
 - **Admin curation console** + agent run dashboard + cost meter.
+- **Full-text + vector hybrid search** with facets. cost meter.
 - **Full-text + vector hybrid search** with facets.
 
 ---
@@ -326,7 +330,7 @@ Screenshots `[req]`, demo video (optional), GIFs, sample data.
 ```
                          ┌──────────────────────────────────────────────┐
    React + Vite + TW ───▶│              API Gateway (FastAPI)           │
-   (frontend.md)         │   auth · routing · rate-limit · validation   │
+   (HCD Storefront)      │   auth · routing · rate-limit · validation   │
                          └───────┬───────────────┬──────────────┬───────┘
                                  │               │              │
                 ┌────────────────┘     ┌─────────┘      ┌───────┘
@@ -437,7 +441,6 @@ vitrine/
 ├── README.md              ← this file (master plan)
 ├── AGENTS.md              ← agent roster, tools, memory, workflows
 ├── backend.md             ← backend architecture, data model, deploy
-├── frontend.md            ← Claude-design build prompt for the storefront
 ├── run.py                 ← top-level launcher (→ local or cloud)
 ├── localrun.py            ← local dev orchestration (services + Vite)
 ├── cloudrun.py            ← native cloud VM deploy (systemd + nginx)
@@ -447,7 +450,7 @@ vitrine/
 │   ├── ai/   (agent fleet)│            orders,notifications,hosting,reviews}
 │   ├── shared/ (db, events, schemas, security)
 │   └── requirements.txt
-└── frontend/              ← React + Vite + Tailwind (built per frontend.md)
+└── frontend/              ← React + Vite + Tailwind HCD storefront
 ```
 
 ---
@@ -496,7 +499,7 @@ This repository delivers the **complete, deployment-ready plan and orchestration
 
 | Phase | Scope | Status |
 |---|---|---|
-| **0 — Planning** | README, AGENTS.md, backend.md, frontend.md, run scripts | ✅ this repo |
+| **0 — Planning** | README, AGENTS.md, backend.md, run scripts | ✅ this repo |
 | **1 — MVP** | Auth, listing CRUD, Repo-Intake agent, Vercel preview embed, mock payments + notify | ▢ planned |
 | **2 — AI fleet** | Verification, Concierge (semantic search), Pricing & Pitch, Vitrine Score | ▢ planned |
 | **3 — Commerce** | Stripe adapter, advance payments, secure delivery, reviews | ▢ planned |
@@ -519,7 +522,7 @@ This repository delivers the **complete, deployment-ready plan and orchestration
 | **Social post** | [§16](#16-social-post-draft) |
 | **Screenshots** | _TODO: add after frontend build_ |
 
-**Judging alignment:** *AI-Native Thinking* → agent fleet is the product core (§5). *Agent Design & Workflow Engineering* → [AGENTS.md](./AGENTS.md), tools, memory, event orchestration. *Creativity & Originality* → preview-first boutique gallery (§2, [frontend.md](./frontend.md)). *Practical Impact* → §1 + Bangladesh student focus.
+**Judging alignment:** *AI-Native Thinking* → agent fleet is the product core (§5). *Agent Design & Workflow Engineering* → [AGENTS.md](./AGENTS.md), tools, memory, event orchestration. *Creativity & Originality* → preview-first boutique gallery (§2, HCD storefront). *Practical Impact* → §1 + Bangladesh student focus.
 
 ---
 
@@ -541,4 +544,4 @@ This repository delivers the **complete, deployment-ready plan and orchestration
 - **Contact:** _TODO_
 - **License:** MIT (suggested) — see `LICENSE`.
 
-> Next: read [AGENTS.md](./AGENTS.md) for the agent fleet, [backend.md](./backend.md) for the architecture & deployment, and [frontend.md](./frontend.md) to generate the premium storefront.
+> Next: read [AGENTS.md](./AGENTS.md) for the agent fleet, and [backend.md](./backend.md) for the architecture & deployment.
