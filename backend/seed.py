@@ -17,7 +17,10 @@ Demo logins (password = email local-part):
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+import random
 import asyncio
+
 
 from backend.shared.db import SessionLocal, create_all, drop_all
 from backend.shared.ids import slugify
@@ -31,11 +34,13 @@ from backend.shared.models import (
     ListingTier,
     Negotiation,
     User,
+    AnalyticEvent,
+    Order,
 )
 from backend.shared.security import hash_password
 from backend.ai.client import client
 
-SEED_VERSION = "4"
+SEED_VERSION = "7"
 DEMO_URL = "https://nextgram.vercel.app"
 
 COVER = "https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=1600&q=80"
@@ -196,17 +201,22 @@ DEFAULT_CONFIG = {
     },
     "notes": "",
     "api_keys": [],
+    "featured_ids": [],
 }
 
 
 async def _add_listing(db, owner_id: str, spec: tuple) -> Listing:
     name, tagline, cat, price, fw, score, tags, cover_key, desc, _seller = spec
     cover_url = COVERS.get(cover_key, COVER)
+    expires = datetime.now(timezone.utc) + timedelta(days=30)
+    if name == "Quiet Hours":
+        expires = datetime.now(timezone.utc) - timedelta(days=5)
     listing = Listing(
         owner_id=owner_id, name=name, slug=slugify(name), tagline=tagline,
         category=cat, tags=tags, framework=fw, price_cents=price * 100,
         license="MIT", status="live", demo_url=DEMO_URL,
         demo_health="live", vitrine_score=score, cover=cover_url,
+        expires_at=expires,
         screenshots=[cover_url] + SHOTS,
         badges=["verified", "live-demo"] + (["best-ui"] if score >= 93 else []),
         description=desc,
@@ -416,8 +426,111 @@ async def seed() -> None:
         settled.status = "settled"
         settled.unread_for = []
 
+        # Seed Analytic Events for the last 14 days
+        today = datetime.now(timezone.utc)
+        
+        # We will add events for the last 14 days
+        for day_offset in range(14):
+            day_time = today - timedelta(days=day_offset)
+            
+            # Seed some general site-wide views (listing_id is None)
+            num_general_views = random.randint(100, 200)
+            for _ in range(num_general_views):
+                event_time = day_time.replace(
+                    hour=random.randint(0, 23),
+                    minute=random.randint(0, 59),
+                    second=random.randint(0, 59)
+                )
+                db.add(AnalyticEvent(
+                    listing_id=None,
+                    event_type="view",
+                    created_at=event_time
+                ))
+            
+            # Seed views/launches for each listing
+            for listing in listing_by_name.values():
+                popularity_factor = (hash(listing.name) % 3) + 1
+                num_views = random.randint(5, 20) * popularity_factor
+                num_launches = random.randint(0, int(num_views * 0.15))
+                
+                for _ in range(num_views):
+                    event_time = day_time.replace(
+                        hour=random.randint(0, 23),
+                        minute=random.randint(0, 59),
+                        second=random.randint(0, 59)
+                    )
+                    db.add(AnalyticEvent(
+                        listing_id=listing.id,
+                        event_type="view",
+                        created_at=event_time
+                    ))
+                for _ in range(num_launches):
+                    event_time = day_time.replace(
+                        hour=random.randint(0, 23),
+                        minute=random.randint(0, 59),
+                        second=random.randint(0, 59)
+                    )
+                    db.add(AnalyticEvent(
+                        listing_id=listing.id,
+                        event_type="launch",
+                        created_at=event_time
+                    ))
+
+        # Seed some paid orders to represent realistic earnings
+        orders_to_create = [
+            (buyer_june, halcyon, 89),
+            (buyer_marco, atrium, 79),
+            (buyer_sana, lumen, 149),
+            (buyer_june, listing_by_name["Foxglove Analytics"], 129),
+            (buyer_marco, listing_by_name["Plumb Line"], 149),
+            (buyer_sana, listing_by_name["Cantata Dash"], 119),
+            
+            # Dev / Studio Korr listings
+            (buyer_june, korr_crm, 99),
+            (buyer_marco, signal_crm, 129),
+            
+            # Studio Vellum listings
+            (buyer_sana, listing_by_name["Maison ERP"], 18500),
+        ]
+        
+        for buyer, listing, price_dollars in orders_to_create:
+            gross = price_dollars * 100
+            rate = 0.12 # default
+            seller_user = next((s for s in sellers.values() if s.id == listing.owner_id), None)
+            if seller_user:
+                if seller_user.plan == "studio":
+                    rate = 0.08
+                elif seller_user.plan == "atelier":
+                    rate = 0.05
+                elif seller_user.plan == "maison":
+                    rate = 0.03
+            commission = int(gross * rate)
+            
+            db.add(Order(
+                buyer_id=buyer.id,
+                listing_id=listing.id,
+                seller_id=listing.owner_id,
+                tier_name="Source",
+                amount_cents=gross,
+                commission_cents=commission,
+                kind="purchase",
+                status="paid",
+                escrow_status="released",
+                provider="mock",
+                created_at=today - timedelta(days=random.randint(1, 10))
+            ))
+
+        featured_listings = [
+            listing_by_name["Maison ERP"].id,
+            listing_by_name["Atrium AI"].id,
+            listing_by_name["Halcyon"].id,
+        ]
+
         for key, value in DEFAULT_CONFIG.items():
-            db.add(AdminConfig(key=key, value=value))
+            if key == "featured_ids":
+                db.add(AdminConfig(key=key, value=featured_listings))
+            else:
+                db.add(AdminConfig(key=key, value=value))
         db.add(AdminConfig(key="seed_version", value=SEED_VERSION))
 
         await db.commit()

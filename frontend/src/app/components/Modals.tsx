@@ -46,7 +46,7 @@ function Header({ title, eyebrow, onClose, icon }: { title: string; eyebrow: str
 }
 
 export function BargainModal({ open, onClose, product, onOpenInbox }: { open: boolean; onClose: () => void; product: Product | null; onOpenInbox: () => void }) {
-  const { user, threads, startThread, sendMessage } = useStore();
+  const { user, threads, startThread, sendMessage, deactivateRep } = useStore();
   const [step, setStep] = useState<'brief' | 'terms'>('brief');
   const [budget, setBudget] = useState(0);
   const [tone, setTone] = useState<'firm' | 'warm' | 'curious'>('warm');
@@ -166,8 +166,34 @@ export function BargainModal({ open, onClose, product, onOpenInbox }: { open: bo
           </div>
         )}
         {user && atLimit && !alreadyForThis && (
-          <div className="hairline border-danger/40 rounded-xl p-4 text-sm">
-            You already have <span className="text-danger">2 active reps</span> — close one before dispatching another.
+          <div className="hairline border-danger/40 rounded-xl p-4 text-sm space-y-3">
+            <div>
+              You already have <span className="text-danger font-medium">2 active reps</span> in flight. Unassign one to start a new negotiation:
+            </div>
+            <div className="space-y-2.5">
+              {reps.map((r) => (
+                <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-surface-2 hairline">
+                  <div className="flex items-center gap-2.5">
+                    <img src={r.productCover} alt="" className="w-8 h-8 rounded object-cover" />
+                    <div className="text-xs">
+                      <span className="font-serif block leading-tight">{r.productName}</span>
+                      <span className="text-[10px] text-text-muted">Budget: ${r.agentBudget}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (confirm(`Are you sure you want to deactivate the AI representative for ${r.productName}?`)) {
+                        await deactivateRep(r.id);
+                      }
+                    }}
+                    className="hairline rounded-lg px-2.5 py-1 text-[11px] text-text-soft hover:border-danger hover:text-danger hover:bg-danger/5 transition-colors cursor-pointer"
+                  >
+                    Unassign
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {alreadyForThis && (
@@ -298,18 +324,51 @@ function Label({ v, children }: { v: string; children: React.ReactNode }) {
 export function RequestFeaturesModal({ open, onClose, product }: { open: boolean; onClose: () => void; product: Product | null }) {
   const { user } = useStore();
   const [features, setFeatures] = useState<string[]>([]);
+  const [featurePrices, setFeaturePrices] = useState<Record<string, number>>({
+    'Custom branding & domain': 380,
+    'Stripe + invoicing integration': 1100,
+    'Multi-tenant workspaces': 2400,
+    'Role-based permissions': 850,
+    'CSV import / export': 420,
+    'Mobile-responsive polish': 540,
+    'Analytics dashboard': 980,
+    'Email notifications': 320,
+  });
+  const [featureRationales, setFeatureRationales] = useState<Record<string, string>>({});
+  const [loadingFeatures, setLoadingFeatures] = useState<Record<string, boolean>>({});
+
   const [draft, setDraft] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const QUICK = ['Custom branding & domain', 'Stripe + invoicing integration', 'Multi-tenant workspaces', 'Role-based permissions', 'CSV import / export', 'Mobile-responsive polish', 'Analytics dashboard', 'Email notifications'];
 
-  const PRICING: Record<string, number> = {
-    'Custom branding & domain': 380, 'Stripe + invoicing integration': 1100, 'Multi-tenant workspaces': 2400, 'Role-based permissions': 850, 'CSV import / export': 420, 'Mobile-responsive polish': 540, 'Analytics dashboard': 980, 'Email notifications': 320,
-  };
-  const aiQuote = (f: string) => PRICING[f] ?? Math.round(280 + f.length * 12);
-
-  const total = features.reduce((sum, f) => sum + aiQuote(f), 0);
+  const total = features.reduce((sum, f) => sum + (featurePrices[f] ?? 0), 0);
   const toggle = (f: string) => setFeatures((s) => s.includes(f) ? s.filter((x) => x !== f) : [...s, f]);
-  const addCustom = () => { if (draft.trim()) { setFeatures((s) => [...s, draft.trim()]); setDraft(''); } };
+
+  const addCustom = async () => {
+    const desc = draft.trim();
+    if (!desc) return;
+    setDraft('');
+    setFeatures((s) => [...s, desc]);
+    setLoadingFeatures((l) => ({ ...l, [desc]: true }));
+
+    if (USE_MOCKS) {
+      setTimeout(() => {
+        setFeaturePrices((p) => ({ ...p, [desc]: Math.round(280 + desc.length * 12) }));
+        setLoadingFeatures((l) => ({ ...l, [desc]: false }));
+      }, 500);
+      return;
+    }
+
+    try {
+      const res = await api.estimateFeature({ listing_id: product?.id ?? '', description: desc });
+      setFeaturePrices((p) => ({ ...p, [desc]: res.estimated_charge }));
+      setFeatureRationales((r) => ({ ...r, [desc]: res.rationale }));
+    } catch (err) {
+      setFeaturePrices((p) => ({ ...p, [desc]: Math.round(280 + desc.length * 12) }));
+    } finally {
+      setLoadingFeatures((l) => ({ ...l, [desc]: false }));
+    }
+  };
 
   if (!product) return null;
   return (
@@ -326,7 +385,7 @@ export function RequestFeaturesModal({ open, onClose, product }: { open: boolean
             {QUICK.map((f) => (
               <button key={f} onClick={() => toggle(f)}
                 className={`hairline rounded-full px-3 py-1.5 text-xs transition-colors ${features.includes(f) ? 'bg-accent text-[var(--accent-ink)] border-transparent' : 'hover:border-accent'}`}>
-                {f} <span className="font-mono opacity-80 ml-1">${aiQuote(f)}</span>
+                {f} <span className="font-mono opacity-80 ml-1">${featurePrices[f] ?? 0}</span>
               </button>
             ))}
           </div>
@@ -345,11 +404,24 @@ export function RequestFeaturesModal({ open, onClose, product }: { open: boolean
             </div>
             <ul>
               {features.map((f) => (
-                <li key={f} className="px-4 py-3 border-t flex items-center justify-between text-sm">
-                  <span>{f}</span>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono tabular">${aiQuote(f)}</span>
-                    <button onClick={() => toggle(f)} className="text-text-muted hover:text-danger"><X size={13} /></button>
+                <li key={f} className="px-4 py-3 border-t text-sm">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0 pr-4">
+                      <span className="font-medium text-text">{f}</span>
+                      {loadingFeatures[f] ? (
+                        <span className="block text-xs text-text-muted animate-pulse mt-0.5">AI estimating charge...</span>
+                      ) : (
+                        featureRationales[f] && (
+                          <span className="block text-xs text-text-muted leading-relaxed mt-1">{featureRationales[f]}</span>
+                        )
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="font-mono tabular">
+                        {loadingFeatures[f] ? '$...' : `$${(featurePrices[f] ?? 0).toLocaleString()}`}
+                      </span>
+                      <button onClick={() => toggle(f)} className="text-text-muted hover:text-danger cursor-pointer"><X size={13} /></button>
+                    </div>
                   </div>
                 </li>
               ))}
@@ -405,7 +477,7 @@ export function CheckoutModal({ open, onClose, product, tierIndex = 0 }: { open:
 
   if (!product) return null;
   const tier = product.tiers?.[tierIndex] ?? { name: 'Source', price: product.price, features: [] };
-  const fee = Math.round(tier.price * 0.025);
+  const fee = Math.round(tier.price * 0.02);
   const total = tier.price + fee;
 
   const submit = async () => {
@@ -416,7 +488,7 @@ export function CheckoutModal({ open, onClose, product, tierIndex = 0 }: { open:
           productId: product.id, productName: product.name,
           buyerId: user?.id ?? 'guest', buyerName: user?.name ?? 'Guest',
           sellerId: sellerIdFor(product), sellerName: product.seller.name,
-          tier: tier.name, amount: total, commission: Math.round(total * 0.08), status: 'paid',
+          tier: tier.name, amount: total, commission: Math.round(tier.price * 0.12), status: 'paid',
         });
         setStep('done'); setProcessing(false);
       }, 1200);

@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react';
-import { Search, Sparkles, User as UserIcon, LogOut, LayoutDashboard, Tag, Menu, X } from 'lucide-react';
+import { Search, Sparkles, User as UserIcon, LogOut, LayoutDashboard, Tag, Menu, X, Store } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Logo } from './Logo';
 import { ThemeToggle } from './ThemeToggle';
 import { Typewriter } from './Typewriter';
 import { useStore } from '../lib/store';
 
-type Route = 'home' | 'browse' | 'product' | 'concierge' | 'sell' | 'dashboard' | 'pricing' | 'login';
+type Route = 'home' | 'browse' | 'product' | 'concierge' | 'sell' | 'dashboard' | 'pricing' | 'login' | 'whats-new' | 'services' | 'about' | 'profile';
 
 export function TopNav({ route, navigate, onConcierge }: { route: Route; navigate: (r: Route) => void; onConcierge: () => void }) {
   const { user, signOut } = useStore();
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const isSeller = user?.role === 'seller';
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 24);
@@ -47,8 +48,10 @@ export function TopNav({ route, navigate, onConcierge }: { route: Route; navigat
           <button onClick={() => navigate('home')} className="shrink-0"><Logo /></button>
           <nav className="hidden md:flex items-center gap-7">
             {link('browse', 'Gallery')}
-            {link('sell', 'Sell')}
-            {link('pricing', 'Pricing')}
+            {link('whats-new', "What's New")}
+            {link('services', 'Services')}
+            {link('about', 'About Us')}
+            {isSeller && link('sell', 'Sell')}
             {user && link('dashboard', 'Dashboard')}
           </nav>
         </div>
@@ -101,6 +104,8 @@ export function TopNav({ route, navigate, onConcierge }: { route: Route; navigat
                     <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted mt-0.5">{user.role}</div>
                   </div>
                   <button onClick={() => { setMenuOpen(false); navigate('dashboard'); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-surface-2 flex items-center gap-2"><LayoutDashboard size={13} /> Dashboard</button>
+                  <button onClick={() => { setMenuOpen(false); navigate('profile'); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-surface-2 flex items-center gap-2"><UserIcon size={13} /> Profile & Settings</button>
+                  {isSeller && <button onClick={() => { setMenuOpen(false); navigate('sell'); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-surface-2 flex items-center gap-2"><Store size={13} /> Sell</button>}
                   <button onClick={() => { setMenuOpen(false); navigate('pricing'); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-surface-2 flex items-center gap-2"><Tag size={13} /> Pricing</button>
                   <button onClick={() => { setMenuOpen(false); signOut(); navigate('home'); }} className="w-full text-left px-4 py-2.5 text-sm hover:bg-surface-2 flex items-center gap-2 border-t text-danger"><LogOut size={13} /> Sign out</button>
                 </div>
@@ -142,8 +147,10 @@ export function TopNav({ route, navigate, onConcierge }: { route: Route; navigat
                 </div>
               )}
               <MobileLink onClick={() => goAndClose('browse')} active={route === 'browse'} label="Gallery" />
-              <MobileLink onClick={() => goAndClose('sell')} active={route === 'sell'} label="Sell" />
-              <MobileLink onClick={() => goAndClose('pricing')} active={route === 'pricing'} label="Pricing" />
+              <MobileLink onClick={() => goAndClose('whats-new')} active={route === 'whats-new'} label="What's New" />
+              <MobileLink onClick={() => goAndClose('services')} active={route === 'services'} label="Services" />
+              <MobileLink onClick={() => goAndClose('about')} active={route === 'about'} label="About Us" />
+              {isSeller && <MobileLink onClick={() => goAndClose('sell')} active={route === 'sell'} label="Sell" />}
               {user && <MobileLink onClick={() => goAndClose('dashboard')} active={route === 'dashboard'} label="Dashboard" icon={<LayoutDashboard size={14} />} />}
               <div className="border-t my-2" />
               {user ? (

@@ -56,13 +56,19 @@ class User(PK, Base):
     is_student: Mapped[bool] = mapped_column(Boolean, default=False)
     student_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     plan: Mapped[str] = mapped_column(String(16), default="free")  # free|studio|atelier|maison
+    banned_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bio: Mapped[str] = mapped_column(Text, default="")
+    location: Mapped[str] = mapped_column(String(120), default="")
+    theme_default: Mapped[str] = mapped_column(String(16), default="dark")
+    minimal_profile: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_points: Mapped[int] = mapped_column(Integer, default=100)
 
 
 # ── catalog ─────────────────────────────────────────────────────────────────
 class Listing(PK, Base):
     __tablename__ = "listings"
 
-    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     slug: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(160))
     tagline: Mapped[str] = mapped_column(String(200), default="")
@@ -100,6 +106,7 @@ class Listing(PK, Base):
     business_model: Mapped[dict] = mapped_column(SAJSON, default=dict)  # {kind,pitch,revenueStreams}
     tech_stack: Mapped[list] = mapped_column(SAJSON, default=list)
     ai_draft: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -112,7 +119,7 @@ class ListingField(PK, Base):
 
     __tablename__ = "listing_fields"
 
-    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), index=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
     section: Mapped[str] = mapped_column(String(64))
     key: Mapped[str] = mapped_column(String(64))
     value: Mapped[dict | list | str | int | float | None] = mapped_column(SAJSON, nullable=True)
@@ -123,7 +130,7 @@ class ListingField(PK, Base):
 class ListingTier(PK, Base):
     __tablename__ = "listing_tiers"
 
-    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), index=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(80))
     price_cents: Mapped[int] = mapped_column(Integer, default=0)
     features: Mapped[list] = mapped_column(SAJSON, default=list)
@@ -133,7 +140,7 @@ class ListingTier(PK, Base):
 class ListingMedia(PK, Base):
     __tablename__ = "listing_media"
 
-    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), index=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(16), default="screenshot")  # screenshot|video|gif
     url: Mapped[str] = mapped_column(String(512))
     position: Mapped[int] = mapped_column(Integer, default=0)
@@ -143,7 +150,7 @@ class ListingMedia(PK, Base):
 class ListingEmbedding(Base):
     __tablename__ = "listing_embeddings"
 
-    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), primary_key=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), primary_key=True)
     # SQLite: JSON float array. Postgres: migrate to pgvector vector(1536).
     embedding: Mapped[list] = mapped_column(SAJSON, default=list)
     text_hash: Mapped[str] = mapped_column(String(64), default="")
@@ -153,16 +160,17 @@ class ListingEmbedding(Base):
 class Order(PK, Base):
     __tablename__ = "orders"
 
-    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), index=True)
-    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    tier_id: Mapped[str | None] = mapped_column(ForeignKey("listing_tiers.id"), nullable=True)
+    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
+    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    tier_id: Mapped[str | None] = mapped_column(ForeignKey("listing_tiers.id", ondelete="CASCADE"), nullable=True)
     tier_name: Mapped[str] = mapped_column(String(80), default="")
     amount_cents: Mapped[int] = mapped_column(Integer, default=0)      # gross
     commission_cents: Mapped[int] = mapped_column(Integer, default=0)  # platform cut
     kind: Mapped[str] = mapped_column(String(16), default="purchase")  # purchase|advance
     # pending|paid|delivered|refunded|disputed
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    escrow_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|holding|released|refunded
     provider: Mapped[str] = mapped_column(String(16), default="mock")
     provider_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
@@ -170,7 +178,7 @@ class Order(PK, Base):
 class Delivery(PK, Base):
     __tablename__ = "deliveries"
 
-    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id"), index=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), index=True)
     artifact_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     license_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -179,8 +187,8 @@ class Delivery(PK, Base):
 class Payout(PK, Base):
     __tablename__ = "payouts"
 
-    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    order_id: Mapped[str | None] = mapped_column(ForeignKey("orders.id"), nullable=True)
+    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    order_id: Mapped[str | None] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), nullable=True)
     amount_cents: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|processed|failed
     payout_method: Mapped[str] = mapped_column(String(16), default="bank")  # bank|mobile_wallet
@@ -191,7 +199,7 @@ class Payout(PK, Base):
 class Subscription(PK, Base):
     __tablename__ = "subscriptions"
 
-    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     tier: Mapped[str] = mapped_column(String(16), default="free")  # free|studio|atelier|maison
     price_cents: Mapped[int] = mapped_column(Integer, default=0)
     start_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -203,8 +211,8 @@ class Subscription(PK, Base):
 class FeatureRequest(PK, Base):
     __tablename__ = "feature_requests"
 
-    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), index=True)
+    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     estimated_charge_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)  # AI estimate
     developer_charge_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)  # seller quote
@@ -217,9 +225,9 @@ class FeatureRequest(PK, Base):
 class Chat(PK, Base):
     __tablename__ = "chats"
 
-    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), index=True)
+    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
     is_agent: Mapped[bool] = mapped_column(Boolean, default=False)  # buyer using AI rep
     agent_budget_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|closed|settled
@@ -229,18 +237,19 @@ class Chat(PK, Base):
 class ChatMessage(PK, Base):
     __tablename__ = "chat_messages"
 
-    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id"), index=True)
+    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True)
     sender_id: Mapped[str] = mapped_column(String(32))  # user id or 'agent'
     sender_name: Mapped[str] = mapped_column(String(120), default="")
     text: Mapped[str] = mapped_column(Text, default="")
     is_agent_rep: Mapped[bool] = mapped_column(Boolean, default=False)
+    attachments: Mapped[list] = mapped_column(SAJSON, default=list)
 
 
 class Negotiation(PK, Base):
     __tablename__ = "negotiations"
 
-    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id"), index=True)
-    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True)
+    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     status: Mapped[str] = mapped_column(String(16), default="active")  # active|closed
     budget_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     target_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -251,8 +260,8 @@ class Negotiation(PK, Base):
 class Review(PK, Base):
     __tablename__ = "reviews"
 
-    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id"), index=True)
-    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
+    buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     rating: Mapped[int] = mapped_column(Integer, default=5)
     body: Mapped[str] = mapped_column(Text, default="")
     verified_purchase: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -262,7 +271,7 @@ class Review(PK, Base):
 class Notification(PK, Base):
     __tablename__ = "notifications"
 
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(32), default="info")
     title: Mapped[str] = mapped_column(String(200), default="")
     body: Mapped[str] = mapped_column(Text, default="")
@@ -275,7 +284,7 @@ class AgentRun(PK, Base):
     __tablename__ = "agent_runs"
 
     agent: Mapped[str] = mapped_column(String(48), index=True)
-    listing_id: Mapped[str | None] = mapped_column(ForeignKey("listings.id"), nullable=True)
+    listing_id: Mapped[str | None] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), nullable=True)
     trigger_event: Mapped[str] = mapped_column(String(64), default="")
     input_hash: Mapped[str] = mapped_column(String(64), default="", index=True)
     model: Mapped[str] = mapped_column(String(48), default="")
@@ -321,3 +330,22 @@ class AuditLog(PK, Base):
     action: Mapped[str] = mapped_column(String(64))
     target: Mapped[str] = mapped_column(String(128), default="")
     meta: Mapped[dict] = mapped_column(SAJSON, default=dict)
+
+
+class AnalyticEvent(PK, Base):
+    __tablename__ = "analytic_events"
+
+    listing_id: Mapped[str | None] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(16))  # "view" | "launch"
+    actor_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class Report(PK, Base):
+    __tablename__ = "reports"
+
+    reporter_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    target_type: Mapped[str] = mapped_column(String(32))  # listing|user|message
+    target_id: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="open")  # open|resolved|dismissed
+

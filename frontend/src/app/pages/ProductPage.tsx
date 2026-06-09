@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Play, Heart, Share2, Check, Star, Bot, Sparkles, Lightbulb, Wrench, Workflow, MessagesSquare, Briefcase, Layers } from 'lucide-react';
+import { Play, Heart, Share2, Check, Star, Bot, Sparkles, Lightbulb, Wrench, Workflow, MessagesSquare, Briefcase, Layers, Flag } from 'lucide-react';
 import { Typewriter } from '../components/Typewriter';
 import { type Product } from '../lib/mockData';
 import { useCatalogProducts } from '../lib/store';
@@ -9,6 +9,7 @@ import { VitrineScoreRing } from '../components/VitrineScoreRing';
 import { SpecSheet } from '../components/SpecSheet';
 import { Badge } from '../components/Badge';
 import { ImageWithFallback } from '../components/ImageWithFallback';
+import { api, USE_MOCKS } from '../lib/api';
 
 export function ProductPage({
   slug, onOpenProduct, onPreview, onBargain, onRequestFeatures, onCheckout,
@@ -17,6 +18,12 @@ export function ProductPage({
   const product = products.find((p) => p.slug === slug);
   const [activeScreen, setActiveScreen] = useState(0);
   const [tier, setTier] = useState(1);
+  const [reviews, setReviews] = useState<{ id: string; rating: number; body: string; verified: boolean; ts: number }[]>([]);
+
+  useEffect(() => {
+    if (!product || USE_MOCKS) return;
+    api.reviews(product.id).then(setReviews).catch(() => setReviews([]));
+  }, [product?.id]);
 
   if (!product) {
     return (
@@ -84,11 +91,19 @@ export function ProductPage({
           </div>
           <div className="flex items-center justify-between hairline rounded-2xl p-5 bg-surface">
             <VitrineScoreRing score={product.vitrineScore} />
-            <div className="text-right">
-              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-text-muted">by</div>
+            <button
+              onClick={() => {
+                const oid = (product as any).ownerId;
+                if (oid) {
+                  window.location.hash = `#/profile/${oid}`;
+                }
+              }}
+              className="text-right hover:text-accent transition-colors cursor-pointer group"
+            >
+              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-text-muted group-hover:text-accent/80">by</div>
               <div className="font-serif text-lg">{product.seller.name}</div>
-              <div className="text-xs text-text-muted">{product.seller.handle}</div>
-            </div>
+              <div className="text-xs text-text-muted group-hover:text-accent/60">{product.seller.handle}</div>
+            </button>
           </div>
 
           {/* Tiers */}
@@ -134,6 +149,20 @@ export function ProductPage({
               </button>
               <button className="w-11 h-11 rounded-xl hairline grid place-items-center hover:border-accent transition-colors" aria-label="Share">
                 <Share2 size={15} />
+              </button>
+              <button onClick={async () => {
+                const reason = prompt("Why are you reporting this product?");
+                if (reason) {
+                  try {
+                    const { api } = await import('../lib/api');
+                    await api.submitReport({ target_type: 'listing', target_id: product.id, reason });
+                    alert("Report submitted.");
+                  } catch (e) {
+                    alert("Failed to submit report.");
+                  }
+                }
+              }} className="w-11 h-11 rounded-xl hairline grid place-items-center hover:border-danger text-text-muted hover:text-danger transition-colors" aria-label="Report">
+                <Flag size={15} />
               </button>
             </div>
           </div>
@@ -257,7 +286,7 @@ export function ProductPage({
           <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-text-muted">Reception</div>
           <h2 className="font-serif mt-3">{product.rating.toFixed(1)} · {product.reviewsCount} reviews</h2>
           <div className="mt-6 space-y-2">
-            {[5,4,3,2,1].map((star, i) => {
+            {[5,4,3,2,1].map((star) => {
               const v = product.ratingDistribution[5 - star];
               return (
                 <div key={star} className="flex items-center gap-3">
@@ -272,24 +301,27 @@ export function ProductPage({
           </div>
         </div>
         <div className="space-y-4">
-          {[
-            { who: 'June P.', when: '2 weeks ago', text: 'Bought this on a Sunday and shipped to production on Wednesday. The seams are clean — feels like an in-house build.' },
-            { who: 'Marco R.', when: 'last month', text: 'The live preview is what closed it for me. You see what you get; you keep what you saw.' },
-          ].map((r) => (
-            <article key={r.who} className="hairline rounded-2xl p-5 bg-surface">
+          {reviews.length === 0 ? (
+            <p className="text-sm text-text-muted">No reviews yet — be the first after purchase.</p>
+          ) : reviews.map((r) => (
+            <article key={r.id} className="hairline rounded-2xl p-5 bg-surface">
               <header className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <span className="w-8 h-8 rounded-full bg-surface-2 grid place-items-center font-serif text-sm">{r.who[0]}</span>
+                  <span className="w-8 h-8 rounded-full bg-surface-2 grid place-items-center font-serif text-sm">★</span>
                   <div>
-                    <div className="text-sm">{r.who}</div>
-                    <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">{r.when}</div>
+                    <div className="text-sm">{r.verified ? 'Verified buyer' : 'Buyer'}</div>
+                    <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">
+                      {new Date(r.ts).toLocaleDateString()}
+                    </div>
                   </div>
                 </div>
                 <div className="flex gap-0.5 text-accent">
-                  {[...Array(5)].map((_, i) => <Star key={i} size={12} fill="currentColor" />)}
+                  {[...Array(5)].map((_, i) => (
+                    <Star key={i} size={12} fill={i < r.rating ? 'currentColor' : 'none'} className={i < r.rating ? '' : 'opacity-30'} />
+                  ))}
                 </div>
               </header>
-              <p className="text-sm text-text-muted mt-3 leading-relaxed">{r.text}</p>
+              <p className="text-sm text-text-muted mt-3 leading-relaxed">{r.body}</p>
             </article>
           ))}
         </div>

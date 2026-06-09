@@ -1,13 +1,12 @@
-import { Bot, Download, Heart, KeyRound, MessageSquare, ShoppingBag, Star, ChevronRight } from 'lucide-react';
+import { Bot, Download, Heart, KeyRound, MessageSquare, ShoppingBag, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
-import { PRODUCTS } from '../../lib/mockData';
-import { useStore, activeRepsForBuyer, type Transaction } from '../../lib/store';
+import { useStore, activeRepsForBuyer, type Listing, type Transaction } from '../../lib/store';
 import { Inbox } from '../../components/Inbox';
 import { OrderDetail } from '../../components/OrderDetail';
 import { PreviewFrame } from '../../components/PreviewFrame';
 
 export function BuyerDashboard() {
-  const { user, transactions, threads } = useStore();
+  const { user, transactions, threads, deactivateRep, listings } = useStore();
   if (!user) return null;
   const [tab, setTab] = useState<'overview' | 'library' | 'orders' | 'reps' | 'messages'>('overview');
   const [openOrder, setOpenOrder] = useState<Transaction | null>(null);
@@ -15,8 +14,10 @@ export function BuyerDashboard() {
 
   const mine = transactions.filter((t) => t.buyerId === user.id);
   const reps = activeRepsForBuyer(user.id, threads);
-  const myOrders = mine.length ? mine : transactions.slice(0, 3);
-  const libraryProducts = (myOrders.map((o) => PRODUCTS.find((p) => p.id === o.productId) ?? PRODUCTS[0]))
+  const myOrders = mine;
+  const libraryProducts = myOrders
+    .map((o) => listings.find((l) => l.id === o.productId))
+    .filter((p): p is Listing => Boolean(p))
     .filter((p, i, arr) => arr.findIndex((q) => q.id === p.id) === i);
 
   const goToProduct = (slug: string) => { window.location.hash = `/p/${slug}`; };
@@ -39,7 +40,7 @@ export function BuyerDashboard() {
       <div className="mt-10">
         {tab === 'overview' && (
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Stat k="Pieces owned" v={String(mine.length || 4)} icon={<ShoppingBag size={14} />} />
+            <Stat k="Pieces owned" v={String(mine.length)} icon={<ShoppingBag size={14} />} />
             <Stat k="Active AI reps" v={`${reps.length} / 2`} icon={<Bot size={14} />} />
             <Stat k="Open threads" v={String(threads.filter((t) => t.buyerId === user.id).length)} icon={<MessageSquare size={14} />} />
             <Stat k="Spent · all time" v={`$${mine.reduce((s, t) => s + t.amount, 0).toLocaleString()}`} icon={<KeyRound size={14} />} />
@@ -117,9 +118,22 @@ export function BuyerDashboard() {
                     </div>
                     <span className="font-mono text-[10px] uppercase tracking-wider text-accent inline-flex items-center gap-1"><Bot size={11} /> active</span>
                   </div>
-                  <div className="mt-4 flex justify-between text-sm">
-                    <span className="text-text-muted">Authorized budget</span>
-                    <span className="font-mono tabular">${r.agentBudget}</span>
+                  <div className="mt-4 flex justify-between items-center text-sm">
+                    <div>
+                      <span className="text-text-muted">Authorized budget</span>
+                      <span className="font-mono tabular ml-1.5">${r.agentBudget}</span>
+                    </div>
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (confirm(`Are you sure you want to deactivate the AI representative for ${r.productName}?`)) {
+                          await deactivateRep(r.id);
+                        }
+                      }}
+                      className="hairline rounded-lg px-3 py-1.5 text-xs text-text-soft hover:border-danger hover:text-danger hover:bg-danger/5 transition-all cursor-pointer"
+                    >
+                      Deactivate rep
+                    </button>
                   </div>
                 </div>
               ))}

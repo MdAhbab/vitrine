@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { motion } from 'motion/react';
 import { ArrowRight, Github, Mail, Lock, Shield, User as UserIcon, GraduationCap, ShoppingBag, Wrench } from 'lucide-react';
 import { Logo } from '../components/Logo';
 import { useStore, MOCK_USER_IDS, type Role } from '../lib/store';

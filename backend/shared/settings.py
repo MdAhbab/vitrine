@@ -8,6 +8,7 @@ cache. Flip DATABASE_URL/EVENT_BUS/CACHE to Postgres+Redis later.
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -52,6 +53,10 @@ class Settings(BaseSettings):
     # negotiation rules --------------------------------------------------
     MAX_ACTIVE_REPS_PER_BUYER: int = 2  # see AGENTS.md Buyer Negotiator
 
+    # file storage -------------------------------------------------------
+    FILES_ROOT: str = "files"
+    CHAT_ATTACHMENT_MAX_BYTES: int = 4 * 1024 * 1024
+
     # ------------------------------------------------------------------
     @property
     def is_sqlite(self) -> bool:
@@ -60,6 +65,11 @@ class Settings(BaseSettings):
     @property
     def allowed_preview_hosts(self) -> list[str]:
         return [h.strip() for h in self.ALLOWED_PREVIEW_HOSTS.split(",") if h.strip()]
+
+    @property
+    def files_root(self) -> Path:
+        # backend/shared/settings.py -> repo root
+        return Path(__file__).resolve().parents[2] / self.FILES_ROOT
 
 
 @lru_cache

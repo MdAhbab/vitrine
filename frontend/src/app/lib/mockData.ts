@@ -25,6 +25,7 @@ export type Product = {
   license: 'MIT' | 'Commercial' | 'Apache-2.0' | 'Proprietary';
   hasLiveDemo: boolean;
   createdAt: string;
+  expiresAt?: string;
   sdlc: {
     problem: string;
     solution: string;

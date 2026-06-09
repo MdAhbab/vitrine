@@ -6,6 +6,7 @@ import { SpecSheet } from '../components/SpecSheet';
 import { PRODUCTS, type Product, type SpecSection } from '../lib/mockData';
 import { api, USE_MOCKS } from '../lib/api';
 import { useStore } from '../lib/store';
+import { MediaPickerMulti } from '../components/MediaPicker';
 
 const STEPS = ['Import', 'Review spec', 'Preview & media', 'Price & pitch', 'Submit'];
 
@@ -27,6 +28,8 @@ export function Sell({ onDone }: { onDone: () => void }) {
   const [tagline, setTagline] = useState('');
   const [price, setPrice] = useState(89);
   const [submitting, setSubmitting] = useState(false);
+  const [screenshots, setScreenshots] = useState<string[]>([]);
+  const [readmeFile, setReadmeFile] = useState<string | null>(null);
 
   useEffect(() => {
     if (!analyzing || !USE_MOCKS) return;
@@ -96,6 +99,8 @@ export function Sell({ onDone }: { onDone: () => void }) {
         price,
         demo_url: demoUrl,
         description: draft.description || tagline,
+        screenshots: screenshots.length ? screenshots : draft.screenshots,
+        cover: screenshots[0] ?? draft.cover,
       });
       await api.submitListing(listingId);
       setStep(4);
@@ -170,8 +175,26 @@ export function Sell({ onDone }: { onDone: () => void }) {
                   <Upload size={18} className="text-text-muted" />
                   <div className="text-sm mt-2">Drop a README or zip</div>
                   <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted mt-1">Or click to browse</div>
-                  <input type="file" className="hidden" />
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".md,.txt,.pdf,.markdown"
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0];
+                      if (!f || USE_MOCKS) return;
+                      try {
+                        const res = await api.uploadFile(f, 'documents');
+                        setReadmeFile(res.url);
+                        toast.success(`Uploaded ${res.name}`);
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : 'Upload failed');
+                      }
+                    }}
+                  />
                 </label>
+                {readmeFile && (
+                  <p className="text-xs text-text-muted mt-2 font-mono">README attached · {readmeFile}</p>
+                )}
 
                 {analyzing && (
                   <div className="mt-4 hairline rounded-xl p-5 bg-bg">
@@ -215,16 +238,13 @@ export function Sell({ onDone }: { onDone: () => void }) {
                     <span className="flex items-center gap-1.5 px-3 font-mono text-[10px] uppercase tracking-wider text-success"><span className="live-dot" /> healthy</span>
                   </div>
                 </div>
-                <div>
-                  <label className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Screenshots</label>
-                  <div className="grid grid-cols-3 gap-3 mt-2">
-                    {(draft.screenshots || PRODUCTS[0].screenshots).slice(0, 3).map((s, i) => (
-                      <div key={i} className="aspect-[4/3] rounded-xl overflow-hidden hairline">
-                        <img src={s} alt="" className="w-full h-full object-cover" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <MediaPickerMulti
+                  values={screenshots.length ? screenshots : (draft.screenshots || [])}
+                  onChange={setScreenshots}
+                  bucket="listings"
+                  label="Screenshots (URL or upload)"
+                  max={6}
+                />
               </div>
             )}
 

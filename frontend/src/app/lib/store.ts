@@ -12,9 +12,22 @@ export type User = {
   avatar?: string;
   isStudent?: boolean;
   plan?: SellerPlan;
+  bio?: string;
+  location?: string;
+  themeDefault?: string;
+  minimalProfile?: boolean;
+  aiPoints?: number;
 };
 
 export type SellerPlan = 'free' | 'studio' | 'atelier' | 'maison';
+
+export type MessageAttachment = {
+  url: string;
+  name: string;
+  mime: string;
+  kind: string;
+  size?: number;
+};
 
 export type Message = {
   id: string;
@@ -23,6 +36,7 @@ export type Message = {
   authorName: string;
   isAgent?: boolean;
   body: string;
+  attachments?: MessageAttachment[];
   ts: number;
 };
 
@@ -53,7 +67,8 @@ export type Transaction = {
   tier: string;
   amount: number;          // gross
   commission: number;      // platform cut
-  status: 'pending' | 'paid' | 'refunded';
+  status: 'pending' | 'paid' | 'refunded' | 'delivered';
+  escrow_status?: 'pending' | 'holding' | 'released' | 'refunded';
   ts: number;
 };
 
@@ -69,7 +84,7 @@ export type Listing = Product & {
 
 export type AdminApiKey = {
   id: string;
-  provider: 'openai' | 'anthropic' | 'gemini' | 'mistral' | 'cohere' | 'stripe' | 'custom';
+  provider: 'openai' | 'anthropic' | 'gemini' | 'grok' | 'nvidia' | 'stripe' | 'custom';
   label: string;
   key: string;
   enabled: boolean;
@@ -97,7 +112,28 @@ export type AdminConfig = {
   escrow: { holdHours: number; refundWindow: number; autoRelease: boolean };
   branding: { headline: string; tagline: string; supportEmail: string };
   notes: string;
+  featuredIds: string[];
+  categories?: string[];
+  frameworks?: string[];
+  sections?: string[];
+  forms?: any[];
 };
+
+const STATUS_MAP: Record<string, Listing['status']> = {
+  review: 'in-review',
+  enriching: 'in-review',
+  flagged: 'in-review',
+  draft: 'draft',
+  live: 'live',
+  rejected: 'rejected',
+  paused: 'draft',
+  archived: 'draft',
+};
+
+export function normalizeListing(raw: Record<string, unknown>): Listing {
+  const status = STATUS_MAP[String(raw.status ?? 'draft')] ?? (raw.status as Listing['status']) ?? 'draft';
+  return { ...(raw as Listing), status };
+}
 
 const DEFAULT_ADMIN_CONFIG: AdminConfig = {
   systemPrompts: {
@@ -116,6 +152,11 @@ const DEFAULT_ADMIN_CONFIG: AdminConfig = {
   escrow: { holdHours: 48, refundWindow: 7, autoRelease: true },
   branding: { headline: 'Software, but make it editorial.', tagline: 'A boutique marketplace for live, runnable software.', supportEmail: 'curator@vitrine.io' },
   notes: '',
+  featuredIds: [],
+  categories: ['Dashboards','Analytics','E-commerce','AI','Finance','CRM','CMS','Productivity','Auth','Enterprise','Healthcare'],
+  frameworks: ['Next.js', 'React', 'Vue', 'Svelte', 'Remix', 'Astro', 'Go'],
+  sections: ["Planning", "Design", "Development", "Architecture", "Data", "Testing", "Security", "Deployment"],
+  forms: [],
 };
 
 type State = {
@@ -127,9 +168,11 @@ type State = {
   activeReps: string[];       // thread ids that are agent reps for current buyer
   signIn: (u: User) => void;
   signOut: () => void;
+  updateUser: (fields: Partial<User>) => void;
   startThread: (input: Omit<Thread, 'id' | 'createdAt' | 'status' | 'unreadFor'>) => string;
-  sendMessage: (threadId: string, body: string, by: { id: string; name: string; isAgent?: boolean }) => Promise<void>;
+  sendMessage: (threadId: string, body: string, by: { id: string; name: string; isAgent?: boolean }, attachments?: MessageAttachment[]) => Promise<void>;
   agentReply: (threadId: string) => Promise<void>;
+  deactivateRep: (threadId: string) => Promise<void>;
   recordTransaction: (t: Omit<Transaction, 'id' | 'ts'>) => void;
   setUserPlan: (p: SellerPlan) => Promise<void>;
   toggleStudent: () => Promise<void>;
@@ -143,6 +186,11 @@ type State = {
   loadSession: () => Promise<void>;
   loadData: () => Promise<void>;
   loadMessages: (threadId: string) => Promise<void>;
+  categories: string[];
+  frameworks: string[];
+  sections: string[];
+  forms: any[];
+  loadPublicConfig: () => Promise<void>;
 };
 
 export const MOCK_USER_IDS = {
@@ -236,6 +284,10 @@ export const useStore = create<State>((set, get) => ({
   transactions: seedTxns,
   listings: PRODUCTS.map((p, i) => ({ ...p, ownerId: sellerFor(p, i).id, status: 'live' as const })),
   activeReps: [],
+  categories: ['Dashboards','Analytics','E-commerce','AI','Finance','CRM','CMS','Productivity','Auth','Enterprise','Healthcare'],
+  frameworks: ['Next.js', 'React', 'Vue', 'Svelte', 'Remix', 'Astro', 'Go'],
+  sections: ["Planning", "Design", "Development", "Architecture", "Data", "Testing", "Security", "Deployment"],
+  forms: [],
 
   signIn: (u) => {
     set({ user: u });
@@ -244,6 +296,9 @@ export const useStore = create<State>((set, get) => ({
   signOut: () => {
     if (!USE_MOCKS) api.clearTokens();
     set({ user: null, threads: [], messages: [], transactions: [] });
+  },
+  updateUser: (fields) => {
+    set((s) => ({ user: s.user ? { ...s.user, ...fields } : null }));
   },
 
   startThread: (input) => {
@@ -256,9 +311,9 @@ export const useStore = create<State>((set, get) => ({
     return id;
   },
 
-  sendMessage: async (threadId, body, by) => {
+  sendMessage: async (threadId, body, by, attachments = []) => {
     if (USE_MOCKS) {
-      const msg: Message = { id: `m_${Math.random().toString(36).slice(2, 9)}`, threadId, authorId: by.id, authorName: by.name, isAgent: by.isAgent, body, ts: Date.now() };
+      const msg: Message = { id: `m_${Math.random().toString(36).slice(2, 9)}`, threadId, authorId: by.id, authorName: by.name, isAgent: by.isAgent, body, attachments, ts: Date.now() };
       set((s) => ({
         messages: [...s.messages, msg],
         threads: s.threads.map((t) => t.id === threadId ? { ...t, unreadFor: by.isAgent || by.id !== t.sellerId ? ['seller'] : ['buyer'] } : t),
@@ -266,10 +321,11 @@ export const useStore = create<State>((set, get) => ({
       return;
     }
     try {
-      await api.send(threadId, body, by.isAgent);
+      await api.send(threadId, body, by.isAgent, attachments);
       await get().loadMessages(threadId);
     } catch (e) {
       console.error(e);
+      throw e;
     }
   },
 
@@ -302,6 +358,22 @@ export const useStore = create<State>((set, get) => ({
       } catch (e) {
         console.error("Agent negotiation failed", e);
       }
+    }
+  },
+
+  deactivateRep: async (threadId) => {
+    if (USE_MOCKS) {
+      set((s) => ({
+        threads: s.threads.map((t) => t.id === threadId ? { ...t, isAgent: false, agentBudget: undefined } : t),
+        activeReps: s.activeReps.filter((id) => id !== threadId),
+      }));
+      return;
+    }
+    try {
+      await api.deactivateRep(threadId);
+      await get().loadData();
+    } catch (e) {
+      console.error(e);
     }
   },
 
@@ -387,13 +459,20 @@ export const useStore = create<State>((set, get) => ({
   adminConfig: DEFAULT_ADMIN_CONFIG,
   updateAdminConfig: async (patch) => {
     if (USE_MOCKS) {
-      set((s) => ({ adminConfig: { ...s.adminConfig, ...patch } }));
+      set((s) => ({
+        adminConfig: { ...s.adminConfig, ...patch },
+        categories: patch.categories ?? s.categories,
+        frameworks: patch.frameworks ?? s.frameworks,
+        sections: patch.sections ?? s.sections,
+        forms: patch.forms ?? s.forms,
+      }));
       return;
     }
     try {
       await api.patchAdminConfig(patch);
       const conf = await api.adminConfig();
       set({ adminConfig: conf });
+      await get().loadPublicConfig();
     } catch (e) {
       console.error(e);
     }
@@ -427,26 +506,43 @@ export const useStore = create<State>((set, get) => ({
     await get().updateAdminConfig({ apiKeys });
   },
 
+  loadPublicConfig: async () => {
+    if (USE_MOCKS) return;
+    try {
+      const cfg = await api.publicConfig();
+      if (cfg) {
+        set({
+          categories: cfg.categories || [],
+          frameworks: cfg.frameworks || [],
+          sections: cfg.sections || [],
+          forms: cfg.forms || []
+        });
+      }
+    } catch (e) {
+      console.error("Failed to load public config", e);
+    }
+  },
+
   loadSession: async () => {
     if (USE_MOCKS) return;
     try {
+      await get().loadPublicConfig();
       const access = localStorage.getItem('vitrine_access');
       if (access) {
         const user = await api.me();
         set({ user });
         await get().loadData();
       } else {
-        const listings = await api.listings();
+        const listings = (await api.listings()).map((l) => normalizeListing(l));
         set({ listings });
       }
     } catch (e) {
       api.clearTokens();
-      // Recover gracefully from stale/invalid JWTs by falling back to public catalog.
       try {
-        const listings = await api.listings();
+        const listings = (await api.listings()).map((l) => normalizeListing(l));
         set({ user: null, listings });
       } catch {
-        // ignore secondary failure; UI can retry via subsequent flows
+        // ignore
       }
     }
   },
@@ -454,13 +550,12 @@ export const useStore = create<State>((set, get) => ({
   loadData: async () => {
     if (USE_MOCKS) return;
     try {
+      await get().loadPublicConfig();
       const user = get().user;
-      let listings = await api.listings();
-      // Sellers/admins also need their non-live items (draft / in-review) which
-      // the public catalog omits — merge owner=me in, deduped by id.
+      let listings = (await api.listings()).map((l) => normalizeListing(l));
       if (user && (user.role === 'seller' || user.role === 'admin')) {
         try {
-          const mine = await api.listings('?owner=me');
+          const mine = (await api.listings('?owner=me')).map((l) => normalizeListing(l));
           const byId = new Map<string, Listing>();
           for (const l of [...listings, ...mine]) byId.set(l.id, l);
           listings = Array.from(byId.values());

@@ -41,7 +41,7 @@ def _order_out(o: Order, listing: Listing, buyer: User, seller: User, delivery: 
         buyerId=o.buyer_id, buyerName=buyer.display_name or buyer.email,
         sellerId=o.seller_id, sellerName=seller.display_name or seller.email,
         tier=o.tier_name, amount=o.amount_cents / 100, commission=o.commission_cents / 100,
-        status=o.status, ts=int(o.created_at.timestamp() * 1000),
+        status=o.status, escrow_status=getattr(o, "escrow_status", None), ts=int(o.created_at.timestamp() * 1000),
         delivered=bool(delivery) if delivery else (o.status == "delivered"),
         licenseKey=delivery.license_key if delivery else None,
     )
@@ -62,17 +62,20 @@ async def checkout(body: CheckoutIn, user: Principal = Depends(current_user),
         select(ListingTier).where(ListingTier.listing_id == listing.id))).scalars().all()
     if tiers and 0 <= body.tier_index < len(tiers):
         tier = tiers[body.tier_index]
-        amount_cents, tier_name, tier_id = tier.price_cents, tier.name, tier.id
+        base_cents, tier_name, tier_id = tier.price_cents, tier.name, tier.id
     else:
-        amount_cents, tier_name, tier_id = listing.price_cents, "Source", None
+        base_cents, tier_name, tier_id = listing.price_cents, "Source", None
+
+    buyer_cents = round(base_cents * 1.02)
+    commission_cents = round(base_cents * 0.12)
 
     provider = get_provider()
-    session = await provider.create_checkout(order_id="pending", amount_cents=amount_cents)
+    session = await provider.create_checkout(order_id="pending", amount_cents=buyer_cents)
 
     order = Order(
         buyer_id=buyer.id, listing_id=listing.id, seller_id=seller.id,
-        tier_id=tier_id, tier_name=tier_name, amount_cents=amount_cents,
-        commission_cents=_commission_cents(amount_cents, seller.plan, seller.is_student),
+        tier_id=tier_id, tier_name=tier_name, amount_cents=buyer_cents,
+        commission_cents=commission_cents,
         kind=body.kind, status=session.status, provider=provider.__class__.__name__,
         provider_ref=session.provider_ref,
     )
@@ -81,6 +84,11 @@ async def checkout(body: CheckoutIn, user: Principal = Depends(current_user),
     await db.refresh(order)
 
     if order.status == "paid":
+        order.escrow_status = "holding"
+        buyer.ai_points = (buyer.ai_points or 0) + (order.amount_cents // 10)
+        db.add(order)
+        db.add(buyer)
+        await db.commit()
         await bus.publish("order.paid", {"order_id": order.id, "seller_id": seller.id,
                                          "listing_id": listing.id}, actor=f"user:{buyer.id}")
     delivery = (await db.execute(select(Delivery).where(Delivery.order_id == order.id))).scalar_one_or_none()
@@ -98,8 +106,15 @@ async def payments_webhook(request: Request, db: AsyncSession = Depends(get_sess
     
     if order and order.status != event.status:
         order.status = event.status
+        if event.status == "paid":
+            order.escrow_status = "holding"
+            buyer = await db.get(User, order.buyer_id)
+            if buyer:
+                buyer.ai_points = (buyer.ai_points or 0) + (order.amount_cents // 10)
+                db.add(buyer)
+        db.add(order)
         await db.commit()
-        
+
         if event.status == "paid":
             await bus.publish(
                 "order.paid",
@@ -263,6 +278,32 @@ async def subscribe(body: SubscribeIn,
         
     u.plan = body.tier
     
+    PLAN_LIMITS = {
+        "free": 2,
+        "studio": 10,
+        "atelier": 40,
+        "maison": 999999,
+    }
+    limit = PLAN_LIMITS.get(body.tier, 999999)
+    
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(Listing)
+        .where(
+            Listing.owner_id == user.id,
+            Listing.status == "live",
+            (Listing.expires_at == None) | (Listing.expires_at > now)
+        )
+        .order_by(Listing.created_at.desc())
+    )
+    user_listings = (await db.execute(stmt)).scalars().all()
+    if len(user_listings) > limit:
+        excess = user_listings[limit:]
+        for l in excess:
+            l.expires_at = now
+            db.add(l)
+            
     sub = Subscription(
         seller_id=user.id,
         tier=body.tier,

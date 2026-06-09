@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Bot, Sparkles, Trash2, Save, Loader2, Plus } from 'lucide-react';
+import { mediaUrl } from '../lib/api';
 import { useStore, type Listing } from '../lib/store';
+import { MediaPicker, MediaPickerMulti } from './MediaPicker';
 import { Typewriter } from './Typewriter';
 
 type Mode = 'view' | 'edit';
@@ -62,7 +64,7 @@ export function ListingEditor({
           {/* Header */}
           <header className="sticky top-0 bg-bg/95 backdrop-blur border-b z-10 px-6 lg:px-8 py-4 flex items-center justify-between rounded-t-2xl">
             <div className="flex items-center gap-3 min-w-0">
-              <img src={draft.cover} alt="" className="w-10 h-10 rounded-lg object-cover" />
+              <img src={mediaUrl(draft.cover)} alt="" className="w-10 h-10 rounded-lg object-cover" />
               <div className="min-w-0">
                 <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">{mode === 'view' ? 'Listing' : 'Editing'}</div>
                 <div className="font-serif text-lg truncate">{draft.name}</div>
@@ -98,6 +100,23 @@ export function ListingEditor({
                 </div>
               </div>
             )}
+
+            {/* Media */}
+            <Section title="Cover & screenshots" hint="Paste a URL or upload images (max 10 MB each).">
+              {mode === 'view' ? (
+                <div className="flex gap-3 flex-wrap">
+                  {draft.cover && <img src={mediaUrl(draft.cover)} alt="" className="w-32 h-20 rounded-lg object-cover hairline" />}
+                  {draft.screenshots?.map((s, i) => (
+                    <img key={i} src={mediaUrl(s)} alt="" className="w-32 h-20 rounded-lg object-cover hairline" />
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <MediaPicker value={draft.cover} onChange={(v) => update('cover', v)} bucket="listings" label="Cover image" />
+                  <MediaPickerMulti values={draft.screenshots ?? []} onChange={(v) => update('screenshots', v)} bucket="listings" label="Screenshots" />
+                </>
+              )}
+            </Section>
 
             {/* Basics */}
             <Section title="Basics">

@@ -1,20 +1,23 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { SlidersHorizontal, X } from 'lucide-react';
-import { CATEGORIES, type Product } from '../lib/mockData';
-import { useCatalogProducts } from '../lib/store';
+import { ChevronLeft, ChevronRight, SlidersHorizontal, X } from 'lucide-react';
+import { type Product } from '../lib/mockData';
+import { useCatalogProducts, useStore } from '../lib/store';
 import { ProductCard } from '../components/ProductCard';
 
 type Sort = 'score' | 'new' | 'price' | 'rating';
+const PAGE_SIZE = 18;
 
 export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct: (slug: string) => void; onPreview: (p: Product) => void; onBargain: (p: Product) => void }) {
   const products = useCatalogProducts();
+  const { categories } = useStore();
   const [cats, setCats] = useState<string[]>([]);
   const [maxPrice, setMaxPrice] = useState(50000);
   const [hasDemo, setHasDemo] = useState(false);
   const [framework, setFramework] = useState<string>('All');
   const [sort, setSort] = useState<Sort>('score');
   const [openFilters, setOpenFilters] = useState(false);
+  const [page, setPage] = useState(1);
 
   const frameworks = useMemo(() => ['All', ...Array.from(new Set(products.map((p) => p.framework)))], [products]);
 
@@ -32,6 +35,27 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
     return r;
   }, [products, cats, maxPrice, hasDemo, framework, sort]);
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const visible = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page]);
+  const rangeStart = filtered.length ? (page - 1) * PAGE_SIZE + 1 : 0;
+  const rangeEnd = Math.min(page * PAGE_SIZE, filtered.length);
+
+  useEffect(() => {
+    setPage(1);
+  }, [cats, maxPrice, hasDemo, framework, sort]);
+
+  useEffect(() => {
+    setPage((p) => Math.min(p, totalPages));
+  }, [totalPages]);
+
+  const goPage = (next: number) => {
+    setPage(Math.min(Math.max(next, 1), totalPages));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const toggleCat = (c: string) => setCats((s) => (s.includes(c) ? s.filter((x) => x !== c) : [...s, c]));
 
   const Filters = (
@@ -39,7 +63,7 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
       <div>
         <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted mb-3">Category</div>
         <div className="space-y-1.5">
-          {CATEGORIES.map((c) => (
+          {categories.map((c) => (
             <label key={c} className="flex items-center gap-2 cursor-pointer text-sm">
               <input
                 type="checkbox"
@@ -96,7 +120,9 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-text-muted">The Gallery</div>
           <h1 className="font-serif mt-3">Browse the collection</h1>
-          <p className="text-text-muted mt-3 text-sm">{filtered.length} pieces on display</p>
+          <p className="text-text-muted mt-3 text-sm">
+            {filtered.length} pieces on display · showing {rangeStart}-{rangeEnd} · max {PAGE_SIZE} per page
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -125,13 +151,13 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
         )}
 
         <motion.div
-          key={`${sort}-${cats.join()}-${maxPrice}-${framework}-${hasDemo}`}
+          key={`${sort}-${cats.join()}-${maxPrice}-${framework}-${hasDemo}-${page}`}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
           className="grid sm:grid-cols-2 xl:grid-cols-3 gap-6"
         >
-          {filtered.map((p) => (
+          {visible.map((p) => (
             <ProductCard key={p.id} product={p} onOpen={() => onOpenProduct(p.slug)} onPreview={() => onPreview(p)} onBargain={() => onBargain(p)} />
           ))}
           {filtered.length === 0 && (
@@ -141,6 +167,45 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
             </div>
           )}
         </motion.div>
+
+        {filtered.length > PAGE_SIZE && (
+          <div className="lg:col-start-2 mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 border-t pt-6">
+            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">
+              Page {page} of {totalPages}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => goPage(page - 1)}
+                disabled={page === 1}
+                className="hairline rounded-full h-9 px-3 text-xs inline-flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none hover:border-accent transition-colors"
+              >
+                <ChevronLeft size={13} /> Previous
+              </button>
+              {Array.from({ length: totalPages }).map((_, i) => {
+                const n = i + 1;
+                return (
+                  <button
+                    key={n}
+                    onClick={() => goPage(n)}
+                    aria-label={`Page ${n}`}
+                    className={`w-9 h-9 rounded-full font-mono text-[10px] transition-colors ${
+                      n === page ? 'bg-text text-bg' : 'hairline text-text-muted hover:text-text hover:border-accent'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => goPage(page + 1)}
+                disabled={page === totalPages}
+                className="hairline rounded-full h-9 px-3 text-xs inline-flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none hover:border-accent transition-colors"
+              >
+                Next <ChevronRight size={13} />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );

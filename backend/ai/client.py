@@ -44,103 +44,130 @@ class LLMResult:
 
 class AIClient:
     def __init__(self) -> None:
-        self._client = None
-        self._cached_key: str | None = None
+        self._clients = []
+        self._cached_hash: int | None = None
 
-    async def _resolve_api_key(self) -> str | None:
-        if settings.OPENAI_API_KEY:
-            return settings.OPENAI_API_KEY
+    async def _get_configured_clients(self) -> list[tuple[any, str]]:
+        # Returns list of (AsyncOpenAI_client, provider_name)
+        # We hash the config rows to decide if we need to rebuild the clients
         try:
             from backend.shared.crypto import decrypt_value
             from backend.shared.db import SessionLocal
             from backend.shared.models import AdminConfig
+            import json
             async with SessionLocal() as db:
                 row = await db.get(AdminConfig, "api_keys")
-                if row and isinstance(row.value, list):
-                    for k in row.value:
-                        if not isinstance(k, dict):
-                            continue
-                        if k.get("provider") == "openai" and k.get("enabled") and k.get("key"):
-                            return decrypt_value(k["key"]) or None
-        except Exception:
-            pass
-        return None
+                if not row or not isinstance(row.value, list):
+                    return []
+                
+                # compute a simple hash of enabled keys
+                active = [k for k in row.value if isinstance(k, dict) and k.get("enabled") and k.get("key")]
+                config_hash = hash(json.dumps([{**k, "key": "MASKED"} for k in active], sort_keys=True))
+                
+                if self._cached_hash == config_hash and self._clients:
+                    return self._clients
 
-    @property
-    def enabled(self) -> bool:
-        return bool(settings.OPENAI_API_KEY)
-
-    @staticmethod
-    def _chat_model_candidates(primary: str | None) -> list[str]:
-        """Try the configured model first, then known stable fallbacks."""
-        candidates = [
-            primary or "",
-            settings.OPENAI_MODEL,
-            "gpt-4o-mini",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "gpt-5-mini",
-            "gpt-5-nano",
-        ]
-        uniq: list[str] = []
-        for m in candidates:
-            if m and m not in uniq:
-                uniq.append(m)
-        return uniq
-
-    async def _ensure_client(self):
-        key = await self._resolve_api_key()
-        if not key:
-            self._client = None
-            self._cached_key = None
-            return False
-        if self._client is None or key != self._cached_key:
-            try:
                 from openai import AsyncOpenAI
-                self._client = AsyncOpenAI(api_key=key)
-                self._cached_key = key
-            except Exception as exc:
-                print(f"[ai] OpenAI client init failed: {exc}")
-                self._client = None
-                return False
-        return True
+                clients = []
+                for k in active:
+                    provider = k.get("provider")
+                    raw_key = decrypt_value(k["key"])
+                    if not raw_key:
+                        continue
+                        
+                    if provider == "openai":
+                        clients.append((AsyncOpenAI(api_key=raw_key), "openai"))
+                    elif provider == "grok":
+                        clients.append((AsyncOpenAI(api_key=raw_key, base_url="https://api.x.ai/v1"), "grok"))
+                    elif provider == "nvidia":
+                        clients.append((AsyncOpenAI(api_key=raw_key, base_url="https://integrate.api.nvidia.com/v1"), "nvidia"))
+                    elif provider == "gemini":
+                        clients.append((AsyncOpenAI(api_key=raw_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/"), "gemini"))
+                    elif provider == "custom":
+                        clients.append((AsyncOpenAI(api_key=raw_key), "custom"))
+                        
+                self._clients = clients
+                self._cached_hash = config_hash
+                return self._clients
+        except Exception as e:
+            print(f"[ai] Client resolve error: {e}")
+            return []
 
     async def chat(self, messages: list[dict], *, tools: list | None = None,
                    model: str | None = None, stream: bool = False,
                    json_mode: bool = False) -> LLMResult:
-        model = model or settings.OPENAI_MODEL
-        if not await self._ensure_client():
-            return self._stub(messages, model)
+        
+        clients = await self._get_configured_clients()
+        
+        # If settings.OPENAI_API_KEY is present, prepend a default OpenAI client
+        if settings.OPENAI_API_KEY:
+            from openai import AsyncOpenAI
+            clients.insert(0, (AsyncOpenAI(api_key=settings.OPENAI_API_KEY), "openai"))
+            
+        if not clients:
+            return self._stub(messages, model or settings.OPENAI_MODEL)
+
         last_exc: Exception | None = None
-        for candidate in self._chat_model_candidates(model):
-            kwargs: dict = {"model": candidate, "messages": messages, "tools": tools or None}
-            # JSON mode forces a parseable object (used by Pricing / Feature estimator).
-            # Can't combine with tool calling, so only set it when no tools are passed.
-            if json_mode and not tools:
-                kwargs["response_format"] = {"type": "json_object"}
-            try:
-                resp = await self._client.chat.completions.create(**kwargs)  # type: ignore[union-attr]
-                choice = resp.choices[0].message
-                usage = resp.usage
-                return LLMResult(
-                    text=choice.content or "",
-                    tool_calls=[tc.model_dump() for tc in (choice.tool_calls or [])],
-                    tokens_in=getattr(usage, "prompt_tokens", 0),
-                    tokens_out=getattr(usage, "completion_tokens", 0),
-                    model=candidate,
-                )
-            except Exception as exc:
-                last_exc = exc
-                continue
+        
+        for client, provider in clients:
+            # Map standard OpenAI models to provider-specific models if needed
+            candidates = self._get_provider_models(provider, model)
+            
+            for candidate in candidates:
+                kwargs: dict = {"model": candidate, "messages": messages, "tools": tools or None}
+                if json_mode and not tools:
+                    # Not all providers support json_object, but we try
+                    if provider in ("openai", "grok"):
+                        kwargs["response_format"] = {"type": "json_object"}
+                try:
+                    resp = await client.chat.completions.create(**kwargs)
+                    choice = resp.choices[0].message
+                    usage = resp.usage
+                    return LLMResult(
+                        text=choice.content or "",
+                        tool_calls=[tc.model_dump() for tc in (choice.tool_calls or [])],
+                        tokens_in=getattr(usage, "prompt_tokens", 0),
+                        tokens_out=getattr(usage, "completion_tokens", 0),
+                        model=candidate,
+                    )
+                except Exception as exc:
+                    last_exc = exc
+                    continue # Try next model or next provider
+                    
         assert last_exc is not None
         raise last_exc
 
+    def _get_provider_models(self, provider: str, requested: str | None) -> list[str]:
+        if provider == "openai":
+            return [requested or settings.OPENAI_MODEL, "gpt-4o-mini", "gpt-4-turbo"]
+        elif provider == "grok":
+            return ["grok-beta", "grok-2-latest"]
+        elif provider == "nvidia":
+            return ["meta/llama-3.1-70b-instruct", "nvidia/nemotron-4-340b-instruct"]
+        elif provider == "gemini":
+            return ["gemini-1.5-flash", "gemini-1.5-pro"]
+        return [requested or settings.OPENAI_MODEL]
+
     async def embed(self, text: str, *, model: str | None = None) -> list[float]:
         model = model or settings.OPENAI_EMBED_MODEL
-        if not await self._ensure_client():
-            return _stub_embedding(text)
-        resp = await self._client.embeddings.create(model=model, input=text)  # type: ignore[union-attr]
-        return resp.data[0].embedding
+        clients = await self._get_configured_clients()
+        
+        if settings.OPENAI_API_KEY:
+            from openai import AsyncOpenAI
+            clients.insert(0, (AsyncOpenAI(api_key=settings.OPENAI_API_KEY), "openai"))
+            
+        # For embeddings, we prefer OpenAI since vector stores expect 1536 dim
+        # but let's try the first available client that is OpenAI compatible for embeddings
+        for client, provider in clients:
+            if provider in ("openai", "gemini"): 
+                embed_model = "text-embedding-3-small" if provider == "openai" else "text-embedding-004"
+                try:
+                    resp = await client.embeddings.create(model=embed_model, input=text)
+                    return resp.data[0].embedding
+                except Exception:
+                    continue
+                    
+        return _stub_embedding(text)
 
     @staticmethod
     def _stub(messages: list[dict], model: str) -> LLMResult:

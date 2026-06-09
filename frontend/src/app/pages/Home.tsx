@@ -1,8 +1,10 @@
 import { motion } from 'motion/react';
 import { ArrowRight, Sparkles, ChevronRight } from 'lucide-react';
-import { CATEGORIES, type Product } from '../lib/mockData';
-import { useCatalogProducts } from '../lib/store';
+import { type Product } from '../lib/mockData';
+import { useCatalogProducts, useStore } from '../lib/store';
 import { ProductCard } from '../components/ProductCard';
+import useEmblaCarousel from 'embla-carousel-react';
+import { useMemo, useState, useEffect } from 'react';
 
 export function Home({
   onOpenProduct,
@@ -17,9 +19,46 @@ export function Home({
   onBrowse: () => void;
   onBargain: (p: Product) => void;
 }) {
+  const { adminConfig, categories } = useStore();
   const products = useCatalogProducts();
   const top = [...products].sort((a, b) => b.vitrineScore - a.vitrineScore);
-  const featured = top[0];
+  
+  const featuredProducts = useMemo(() => {
+    if (adminConfig?.featuredIds && adminConfig.featuredIds.length > 0) {
+      const matched = adminConfig.featuredIds
+        .map((id) => products.find((p) => p.id === id))
+        .filter((p): p is Product => !!p);
+      if (matched.length > 0) return matched;
+    }
+    // Fallback: top 3 products by Vitrine Score
+    return top.slice(0, 3);
+  }, [products, adminConfig?.featuredIds, top]);
+
+  const hasFeatured = featuredProducts.length > 0;
+
+  const [emblaRef, emblaApi] = useEmblaCarousel({ loop: true, duration: 35 });
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  useEffect(() => {
+    if (!emblaApi) return;
+    const onSelect = () => {
+      setSelectedIndex(emblaApi.selectedScrollSnap());
+    };
+    emblaApi.on('select', onSelect);
+    onSelect();
+    return () => {
+      emblaApi.off('select', onSelect);
+    };
+  }, [emblaApi]);
+
+  useEffect(() => {
+    if (!emblaApi || featuredProducts.length <= 1) return;
+    const interval = setInterval(() => {
+      emblaApi.scrollNext();
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [emblaApi, featuredProducts]);
+
   const bestUi = Array.from(
     new Map(
       [...top.filter((p) => p.badges.includes('best-ui')), ...top].map((p) => [p.id, p])
@@ -66,33 +105,43 @@ export function Home({
           <motion.div
             initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.8, delay: 0.15, ease: [0.22, 1, 0.36, 1] }}
-            className="relative"
+            className="relative w-full"
           >
-            <div className="relative aspect-[5/6] rounded-2xl overflow-hidden hairline bg-surface">
-              {featured ? (
-                <>
-                  <img src={featured.cover} alt="" className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
-                  <div className="absolute top-5 left-5 right-5 flex items-center justify-between text-white/90 font-mono text-[10px] uppercase tracking-[0.25em]">
-                    <span className="flex items-center gap-2"><span className="live-dot" /> Now showing</span>
-                    <span>#001 / 2026</span>
-                  </div>
-                  <div className="absolute bottom-5 left-5 right-5 text-white">
-                    <div className="font-serif text-4xl">{featured.name}</div>
-                    <div className="text-sm opacity-85 mt-1.5">{featured.tagline}</div>
-                    <div className="mt-5 flex items-center justify-between gap-2">
-                      <button
-                        onClick={() => onPreview(featured)}
-                        className="bg-accent text-[var(--accent-ink)] rounded-full pl-3 pr-4 h-10 text-sm font-medium inline-flex items-center gap-1.5"
-                      >
-                        <Sparkles size={13} /> Open the vitrine
-                      </button>
-                      <button onClick={() => onOpenProduct(featured.slug)} className="text-sm opacity-90 border-b border-white/40">
-                        View piece →
-                      </button>
+            <div className="overflow-hidden rounded-2xl hairline bg-surface aspect-[5/6]" ref={emblaRef}>
+              {hasFeatured ? (
+                <div className="flex h-full">
+                  {featuredProducts.map((prod) => (
+                    <div key={prod.id} className="relative flex-[0_0_100%] min-w-0 h-full">
+                      <img src={prod.cover} alt="" className="w-full h-full object-cover select-none" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
+                      
+                      <div className="absolute top-5 left-5 right-5 flex items-center justify-between text-white/90 font-mono text-[10px] uppercase tracking-[0.25em] z-10 pointer-events-none">
+                        <span className="flex items-center gap-2"><span className="live-dot" /> Now showing</span>
+                        <span>#{(products.findIndex(p => p.id === prod.id) + 1).toString().padStart(3, '0')} / 2026</span>
+                      </div>
+                      
+                      <div className="absolute bottom-5 left-5 right-5 text-white z-10 pr-[75px] md:pr-0">
+                        <div className="font-serif text-3xl sm:text-4xl">{prod.name}</div>
+                        <div className="text-sm opacity-85 mt-1.5 line-clamp-2 max-w-md">{prod.tagline}</div>
+                        
+                        <div className="mt-5 flex items-center justify-start gap-4">
+                          <button
+                            onClick={() => onPreview(prod)}
+                            className="bg-accent text-[var(--accent-ink)] rounded-full pl-3 pr-4 h-10 text-sm font-medium inline-flex items-center gap-1.5 hover:opacity-90 transition-opacity cursor-pointer shadow-lg"
+                          >
+                            <Sparkles size={13} /> Open the vitrine
+                          </button>
+                          <button 
+                            onClick={() => onOpenProduct(prod.slug)} 
+                            className="text-sm opacity-90 border-b border-white/40 hover:text-accent hover:border-accent transition-colors cursor-pointer"
+                          >
+                            View piece →
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </>
+                  ))}
+                </div>
               ) : (
                 <div className="absolute inset-0 grid place-items-center p-8 text-center">
                   <div>
@@ -102,13 +151,31 @@ export function Home({
                 </div>
               )}
             </div>
-            <div className="absolute -bottom-6 -left-6 hidden md:block hairline rounded-xl bg-surface px-4 py-3 shadow-2xl">
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Vitrine Score</div>
-              <div className="flex items-baseline gap-2 mt-0.5">
-                <span className="font-serif text-3xl tabular">{featured?.vitrineScore ?? '--'}</span>
-                <span className="text-xs text-text-muted">/ 100</span>
+
+            {/* Slide indicator dots (only if multiple items) */}
+            {hasFeatured && featuredProducts.length > 1 && (
+              <div className="absolute bottom-7 right-5 flex gap-1.5 z-20 bg-black/40 backdrop-blur-md rounded-full px-2.5 py-1.5 hairline border-white/10">
+                {featuredProducts.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => emblaApi?.scrollTo(i)}
+                    className={`w-1.5 h-1.5 rounded-full transition-all ${selectedIndex === i ? 'bg-white scale-125' : 'bg-white/30 hover:bg-white/60'}`}
+                    aria-label={`Go to slide ${i + 1}`}
+                  />
+                ))}
               </div>
-            </div>
+            )}
+            
+            {/* Vitrine Score Badge - bottom-right to avoid overlapping the gold button in the bottom-left */}
+            {hasFeatured && (
+              <div className="absolute -bottom-6 -right-6 hidden md:block hairline rounded-xl bg-surface px-4 py-3 shadow-2xl z-20 transition-all duration-300">
+                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Vitrine Score</div>
+                <div className="flex items-baseline gap-2 mt-0.5">
+                  <span className="font-serif text-3xl tabular">{featuredProducts[selectedIndex]?.vitrineScore ?? '--'}</span>
+                  <span className="text-xs text-text-muted">/ 100</span>
+                </div>
+              </div>
+            )}
           </motion.div>
         </div>
 
@@ -135,7 +202,7 @@ export function Home({
           </button>
 
           <div className="mt-4 flex flex-wrap gap-1.5">
-            {CATEGORIES.slice(0, 8).map((c) => (
+            {categories.slice(0, 8).map((c) => (
               <button key={c} onClick={onBrowse} className="font-mono text-[10px] uppercase tracking-wider px-2.5 py-1.5 hairline rounded-full text-text-soft hover:text-accent hover:border-accent transition-colors">
                 {c}
               </button>
@@ -169,7 +236,7 @@ export function Home({
       <section className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-20">
         <Header eyebrow="By department" title="Wander the floor" />
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-px bg-border-c mt-10 hairline rounded-2xl overflow-hidden">
-          {CATEGORIES.map((c) => {
+          {categories.map((c) => {
             const count = products.filter((p) => p.category === c).length;
             return (
               <button
@@ -177,7 +244,7 @@ export function Home({
                 onClick={onBrowse}
                 className="bg-surface hover:bg-surface-2 p-8 text-left transition-colors group"
               >
-                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">{String(CATEGORIES.indexOf(c) + 1).padStart(2, '0')}</div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">{String(categories.indexOf(c) + 1).padStart(2, '0')}</div>
                 <div className="font-serif text-2xl mt-3 flex items-center justify-between">
                   {c}
                   <ChevronRight size={18} className="text-text-muted group-hover:text-accent group-hover:translate-x-1 transition-all" />

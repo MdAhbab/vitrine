@@ -81,6 +81,11 @@ __pycache__/
 *.db-wal
 vitrine.db
 
+# Uploaded media (keep scaffold)
+files/**
+!files/README.md
+!files/**/.gitkeep
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

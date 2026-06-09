@@ -303,14 +303,29 @@ async def check_demo_health(url: str) -> dict:
           }, "required": ["readme_text", "detected_stack"]})
 async def cross_check_claims(readme_text: str, detected_stack: dict) -> dict:
     discrepancies = []
-    detected_langs = [l.lower() for l in detected_stack.get("languages", [])]
-    detected_fws = [f.lower() for f in detected_stack.get("frameworks", [])]
     
-    # check for claims in readme
-    if "postgres" in readme_text.lower() and "postgres" not in detected_fws and "postgresql" not in detected_fws:
+    # Extract all string terms from detected_stack in a robust manner
+    all_terms = set()
+    if isinstance(detected_stack, list):
+        for item in detected_stack:
+            if isinstance(item, str):
+                all_terms.add(item.lower())
+    elif isinstance(detected_stack, dict):
+        # Scan all keys and values in the dictionary
+        for k, v in detected_stack.items():
+            if isinstance(v, list):
+                for item in v:
+                    if isinstance(item, str):
+                        all_terms.add(item.lower())
+            elif isinstance(v, str):
+                all_terms.add(v.lower())
+            all_terms.add(k.lower())
+            
+    # check for claims in readme against extracted terms
+    if "postgres" in readme_text.lower() and not any("postgres" in t or "postgresql" in t for t in all_terms):
         discrepancies.append("README claims Postgres usage, but no database dependencies or references detected in manifests.")
         
-    if "redis" in readme_text.lower() and "redis" not in detected_fws:
+    if "redis" in readme_text.lower() and not any("redis" in t for t in all_terms):
         discrepancies.append("README claims Redis caching, but no Redis client detected in manifests.")
         
     return {

@@ -31,7 +31,26 @@ class UserOut(BaseModel):
     avatar: str | None = None
     isStudent: bool = False
     plan: str | None = None
+    bio: str = ""
+    location: str = ""
+    themeDefault: str = "dark"
+    minimalProfile: bool = False
+    aiPoints: int = 100
 
 
 class RefreshIn(BaseModel):
     refresh_token: str
+
+
+class ProfileUpdateIn(BaseModel):
+    display_name: str | None = None
+    bio: str | None = None
+    location: str | None = None
+    avatar_url: str | None = None
+    theme_default: str | None = None
+    minimal_profile: bool | None = None
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str

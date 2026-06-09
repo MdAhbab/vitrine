@@ -59,6 +59,7 @@ class AdminConfigOut(BaseModel):
     escrow: Escrow
     branding: Branding
     notes: str = ""
+    featuredIds: list[str] = []
 
 
 class AdminConfigPatch(BaseModel):
@@ -68,6 +69,7 @@ class AdminConfigPatch(BaseModel):
     escrow: Escrow | None = None
     branding: Branding | None = None
     notes: str | None = None
+    featuredIds: list[str] | None = None
 
 
 class AddApiKeyIn(BaseModel):

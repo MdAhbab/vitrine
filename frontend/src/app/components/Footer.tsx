@@ -1,6 +1,9 @@
 import { Logo } from './Logo';
+import { useStore } from '../lib/store';
 
 export function Footer({ navigate }: { navigate: (hash: string) => void }) {
+  const user = useStore((s) => s.user);
+  const isSeller = user?.role === 'seller';
   const link = (h: string, label: string) => (
     <li><button onClick={() => navigate(h)} className="text-sm hover:text-accent transition-colors">{label}</button></li>
   );
@@ -32,18 +35,19 @@ export function Footer({ navigate }: { navigate: (hash: string) => void }) {
           </ul>
         </div>
         <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Makers</div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">{isSeller ? 'Makers' : 'Services'}</div>
           <ul className="mt-4 space-y-2">
-            {link('/sell', 'Sell a piece')}
-            {link('/pricing', 'Pricing & plans')}
-            {link('/dashboard', 'Studio dashboard')}
-            {link('/about', 'How we curate')}
+            {isSeller && link('/sell', 'Sell a piece')}
+            {isSeller && link('/pricing', 'Pricing & plans')}
+            {isSeller && link('/dashboard', 'Studio dashboard')}
+            {link('/services', 'Services')}
+            {link('/whats-new', "What's New")}
           </ul>
         </div>
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">House</div>
           <ul className="mt-4 space-y-2">
-            {link('/about', 'About')}
+            {link('/about', 'About Us')}
             {link('/press', 'Press')}
             {link('/contact', 'Contact')}
             {link('/admin-login', 'Curator sign-in')}
@@ -52,7 +56,7 @@ export function Footer({ navigate }: { navigate: (hash: string) => void }) {
       </div>
       <div className="border-t">
         <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-5 flex flex-wrap items-center justify-between gap-3 text-xs text-text-muted font-mono uppercase tracking-wider">
-          <div>© 2026 Vitrine · Curated in Lisbon & Brooklyn</div>
+          <div>© 2026 Vitrine · Curated in Dhaka, Bangladesh, Hosted In Google Cloud Platforms.</div>
           <div className="flex gap-5">
             <button onClick={() => navigate('/terms')} className="hover:text-text">Terms</button>
             <button onClick={() => navigate('/privacy')} className="hover:text-text">Privacy</button>

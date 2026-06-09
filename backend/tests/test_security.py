@@ -29,3 +29,23 @@ async def test_memory_rate_limiter_blocks():
     from fastapi import HTTPException
     with pytest.raises(HTTPException):
         await limiter.check("test:key", limit=5, window=60)
+
+
+@pytest.mark.asyncio
+async def test_ai_rate_limit_enforced():
+    from backend.shared.security import ai_rate_limit
+    from fastapi import Request, HTTPException
+    from unittest.mock import Mock
+
+    mock_request = Mock(spec=Request)
+    mock_request.headers = {}
+    mock_request.client = Mock()
+    mock_request.client.host = "9.9.9.9"
+
+    for _ in range(10):
+        await ai_rate_limit(mock_request)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await ai_rate_limit(mock_request)
+    assert excinfo.value.status_code == 429
+

@@ -18,6 +18,7 @@ const SUGGESTIONS = [
 ];
 
 export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean; onClose: () => void; onOpenProduct: (slug: string) => void }) {
+  const { user } = useStore();
   const products = useCatalogProducts();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -76,7 +77,7 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
         });
       }
       if (chunk.type === 'results' && chunk.results) {
-        resultSlugs = chunk.results.map((r: { slug: string; name: string; tagline: string; price: number; vitrineScore: number }) => {
+        resultSlugs = chunk.results.map((r: { id?: string; slug: string; name: string; tagline: string; price: number; vitrineScore: number }) => {
           const full = products.find((p) => p.slug === r.slug || p.id === r.id);
           return full ?? {
             id: r.id || r.slug,
@@ -136,6 +137,10 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
 
   async function send(q: string) {
     if (!q.trim() || streaming) return;
+    if (!user) {
+      setMessages((m) => [...m, { role: 'user', text: q }, { role: 'assistant', text: 'You must be logged in to use the AI concierge. Please sign in to ask questions or explore semantic search.' }]);
+      return;
+    }
     setMessages((m) => [...m, { role: 'user', text: q }]);
     setInput('');
     setStreaming(true);

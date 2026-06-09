@@ -22,7 +22,8 @@ class OrderOut(BaseModel):
     tier: str
     amount: float        # gross dollars
     commission: float
-    status: str          # pending | paid | refunded
+    status: str          # pending | paid | refunded | delivered
+    escrow_status: str | None = None
     ts: int              # epoch ms
     delivered: bool | None = None
     licenseKey: str | None = None

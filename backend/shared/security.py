@@ -13,8 +13,10 @@ import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .settings import settings
+from .db import get_session
 
 Role = Literal["buyer", "seller", "admin"]
 
@@ -65,17 +67,27 @@ class Principal:
 
 async def current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: AsyncSession = Depends(get_session)
 ) -> Principal:
     if not creds:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
     claims = decode_token(creds.credentials)
     if claims.get("kind") != "access":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not an access token")
-    return Principal(claims["sub"], claims.get("role", "buyer"))
+    
+    from .models import User
+    u = await db.get(User, claims["sub"])
+    if not u:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
+    if u.banned_until and u.banned_until > datetime.now(timezone.utc):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account suspended")
+        
+    return Principal(u.id, u.role)
 
 
 async def optional_user(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: AsyncSession = Depends(get_session)
 ) -> Principal | None:
     if not creds:
         return None
@@ -83,7 +95,11 @@ async def optional_user(
         claims = decode_token(creds.credentials)
         if claims.get("kind") != "access":
             return None
-        return Principal(claims["sub"], claims.get("role", "buyer"))
+        from .models import User
+        u = await db.get(User, claims["sub"])
+        if not u or (u.banned_until and u.banned_until > datetime.now(timezone.utc)):
+            return None
+        return Principal(u.id, u.role)
     except Exception:
         return None
 
@@ -111,4 +127,11 @@ def rate_limit(limit: int = 60, window: int = 60, scope: str = "api"):
 
 # Preset limiters (stricter on AI + auth)
 auth_rate_limit = rate_limit(limit=20, window=60, scope="auth")
-ai_rate_limit = rate_limit(limit=30, window=60, scope="ai")
+
+
+async def ai_rate_limit(request: Request) -> None:
+    """FastAPI dependency — composite limiter to stop AI token abuse.
+    Max 10 requests per 60 seconds (burst protection), and max 100 requests per hour (volume limit).
+    """
+    await enforce_rate_limit(request, scope="ai_short", limit=10, window=60)
+    await enforce_rate_limit(request, scope="ai_long", limit=100, window=3600)

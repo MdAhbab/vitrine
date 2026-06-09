@@ -15,14 +15,16 @@ zero setup. See backend.md §"Step-by-step".
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.shared.settings import settings
+from backend.shared.storage import ensure_buckets
 
 # Each service exposes an APIRouter named `router`.
 from backend.services.identity.app import router as identity_router
+from backend.services.media.app import router as media_router
 from backend.services.catalog.app import router as catalog_router
 from backend.services.search.app import router as search_router
 from backend.services.orders.app import router as orders_router
@@ -38,6 +40,7 @@ async def lifespan(app: FastAPI):
     if settings.ENV == "local" and settings.is_sqlite:
         from backend.shared.db import create_all
         await create_all()
+    ensure_buckets()
     # Monolith mode: include-router doesn't run sub-app lifespans, so wire the
     # event-driven agent pipeline (listing.created -> intake -> verify -> score)
     # and notification handlers here.
@@ -76,8 +79,13 @@ else:
 for r in (
     identity_router, catalog_router, search_router, orders_router,
     notifications_router, hosting_router, reviews_router, chats_router, ai_router,
+    media_router,
 ):
     app.include_router(r)
+
+files_dir = settings.files_root
+files_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/files", StaticFiles(directory=str(files_dir)), name="files")
 
 
 @app.get("/health")

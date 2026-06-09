@@ -69,4 +69,5 @@ def to_product(listing: Listing, seller: User | None,
         aiDraft=listing.ai_draft,
         status=listing.status,
         ownerId=listing.owner_id,
+        expiresAt=listing.expires_at.isoformat() if listing.expires_at else None,
     )

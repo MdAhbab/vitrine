@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from sqlalchemy import select
@@ -21,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from backend.shared.db import get_session
-from backend.shared.models import AdminConfig, AgentRun, Listing, Chat, User
+from backend.shared.models import AdminConfig, AgentRun, Listing, Chat, User, Order, Report
 from backend.shared.schemas.ai import (
     ConciergeIn,
     EstimateFeatureIn,
@@ -30,7 +31,7 @@ from backend.shared.schemas.ai import (
 )
 from backend.shared.schemas.listing import IntakeIn
 from backend.shared.crypto import encrypt_value
-from backend.shared.security import Principal, ai_rate_limit, current_user, optional_user, require_role
+from backend.shared.security import Principal, ai_rate_limit, current_user, hash_password, optional_user, require_role
 
 from .agents import concierge, feature_estimator, negotiator, pricing, repo_intake
 from .budget import budget
@@ -52,7 +53,7 @@ async def intake(body: IntakeIn, listing_id: str,
 
 
 @router.post("/ai/concierge", dependencies=[Depends(ai_rate_limit)])
-async def concierge_stream(body: ConciergeIn, user: Principal | None = Depends(optional_user)):
+async def concierge_stream(body: ConciergeIn, user: Principal | None = Depends(optional_user), db: AsyncSession = Depends(get_session)):
     async def gen():
         async for chunk in concierge.stream(body.query, body.history):
             yield {"data": json.dumps(chunk)}
@@ -75,12 +76,14 @@ async def negotiate(body: NegotiateIn, user: Principal = Depends(current_user),
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not an agent negotiation chat")
     if chat.buyer_id != user.id and user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the buyer can dispatch the AI rep")
+    
     return await negotiator.next_message(body.chat_id)
 
 
 @router.post("/ai/estimate-feature", dependencies=[Depends(ai_rate_limit)])
 async def estimate_feature(body: EstimateFeatureIn,
-                           user: Principal = Depends(current_user)) -> dict:
+                           user: Principal = Depends(current_user),
+                           db: AsyncSession = Depends(get_session)) -> dict:
     return await feature_estimator.estimate(body.listing_id, body.description)
 
 
@@ -103,6 +106,11 @@ async def get_config(user: Principal = Depends(require_role("admin")),
         "escrow": rows.get("escrow", {}),
         "branding": rows.get("branding", {}),
         "notes": rows.get("notes", ""),
+        "featuredIds": rows.get("featured_ids", []),
+        "categories": rows.get("categories", []),
+        "frameworks": rows.get("frameworks", []),
+        "sections": rows.get("sections", []),
+        "forms": rows.get("forms", []),
     }
 
 
@@ -112,7 +120,8 @@ async def patch_config(patch: dict, user: Principal = Depends(require_role("admi
     # map camelCase frontend keys -> admin_configs row keys
     keymap = {"systemPrompts": "system_prompts", "apiKeys": "api_keys",
               "flags": "flags", "fees": "fees", "escrow": "escrow",
-              "branding": "branding", "notes": "notes"}
+              "branding": "branding", "notes": "notes",
+              "featuredIds": "featured_ids"}
     for fe_key, value in patch.items():
         row_key = keymap.get(fe_key, fe_key)
         stored = value
@@ -163,7 +172,7 @@ async def agent_runs(user: Principal = Depends(require_role("admin")),
 @router.get("/admin/verification-queue", response_model=list[dict])
 async def verification_queue(user: Principal = Depends(require_role("admin")),
                              db: AsyncSession = Depends(get_session)) -> list[dict]:
-    stmt = select(Listing).where(Listing.status.in_(["review", "flagged", "enriching", "draft"]))
+    stmt = select(Listing)
     rows = (await db.execute(stmt)).scalars().all()
     res = []
     for r in rows:
@@ -176,7 +185,11 @@ async def verification_queue(user: Principal = Depends(require_role("admin")),
             "price": r.price_cents / 100,
             "framework": r.framework or "",
             "status": r.status,
-            "seller": {"name": seller.display_name if seller else "Unknown"}
+            "seller": {"name": seller.display_name if seller else "Unknown"},
+            "tagline": r.tagline or "",
+            "description": r.description or "",
+            "demoUrl": r.demo_url or "",
+            "expiresAt": r.expires_at.isoformat() if r.expires_at else None
         })
     return res
 
@@ -226,6 +239,140 @@ async def admin_chats(user: Principal = Depends(require_role("admin")),
             "createdAt": int(c.created_at.timestamp() * 1000),
         })
     return res
+
+
+@router.get("/admin/users", response_model=list[dict])
+async def admin_users(user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> list[dict]:
+    rows = (await db.execute(select(User).order_by(User.created_at.desc()))).scalars().all()
+    return [{"id": u.id, "name": u.display_name, "email": u.email, "role": u.role, "banned_until": u.banned_until.isoformat() if u.banned_until else None} for u in rows]
+
+@router.post("/admin/users/{user_id}/ban")
+async def admin_ban_user(user_id: str, body: dict, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
+    u = await db.get(User, user_id)
+    if not u: raise HTTPException(404, "User not found")
+    months = body.get("months")
+    if months == "infinite":
+        u.banned_until = datetime.max.replace(tzinfo=timezone.utc)
+    elif months:
+        u.banned_until = datetime.now(timezone.utc) + timedelta(days=30 * int(months))
+    else:
+        u.banned_until = None  # Unban
+    db.add(u)
+    await db.commit()
+    return {"ok": True}
+
+@router.delete("/admin/users/{user_id}")
+async def admin_remove_user(user_id: str, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
+    u = await db.get(User, user_id)
+    if not u: raise HTTPException(404, "User not found")
+    await db.delete(u)
+    await db.commit()
+    return {"ok": True}
+
+@router.post("/admin/users/{user_id}/reset-password")
+async def admin_reset_user_pass(user_id: str, body: dict, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
+    u = await db.get(User, user_id)
+    if not u: raise HTTPException(404, "User not found")
+    new_pass = body.get("password")
+    if not new_pass: raise HTTPException(400, "Password required")
+    u.password_hash = hash_password(new_pass)
+    db.add(u)
+    await db.commit()
+    return {"ok": True}
+
+@router.post("/admin/reset-password")
+async def admin_reset_own_pass(body: dict, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
+    u = await db.get(User, user.id)
+    new_pass = body.get("password")
+    if not new_pass: raise HTTPException(400, "Password required")
+    u.password_hash = hash_password(new_pass)
+    db.add(u)
+    await db.commit()
+    return {"ok": True}
+
+@router.get("/admin/reports")
+async def admin_get_reports(user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> list[dict]:
+    rows = (await db.execute(select(Report).order_by(Report.created_at.desc()))).scalars().all()
+    return [{"id": r.id, "reporter_id": r.reporter_id, "target_type": r.target_type, "target_id": r.target_id, "reason": r.reason, "status": r.status, "created_at": r.created_at.isoformat()} for r in rows]
+
+@router.post("/reports")
+async def submit_report(body: dict, user: Principal = Depends(current_user), db: AsyncSession = Depends(get_session)) -> dict:
+    target_type = body.get("target_type")
+    target_id = body.get("target_id")
+    reason = body.get("reason")
+    if not target_type or not target_id or not reason:
+        raise HTTPException(400, "Missing report fields")
+    r = Report(reporter_id=user.id, target_type=target_type, target_id=target_id, reason=reason)
+    db.add(r)
+    await db.commit()
+    return {"ok": True}
+
+@router.delete("/admin/listings/{listing_id}")
+async def admin_delete_listing(listing_id: str, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
+    l = await db.get(Listing, listing_id)
+    if not l: raise HTTPException(404, "Listing not found")
+    await db.delete(l)
+    await db.commit()
+    return {"ok": True}
+
+@router.patch("/admin/listings/{listing_id}")
+async def admin_edit_listing(listing_id: str, body: dict, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
+    l = await db.get(Listing, listing_id)
+    if not l: raise HTTPException(404, "Listing not found")
+    
+    if "status" in body: l.status = body["status"]
+    if "name" in body: l.name = body["name"]
+    if "tagline" in body: l.tagline = body["tagline"]
+    if "category" in body: l.category = body["category"]
+    if "framework" in body: l.framework = body["framework"]
+    if "price" in body: l.price_cents = int(body["price"] * 100)
+    if "description" in body: l.description = body["description"]
+    if "cover" in body: l.cover = body["cover"]
+    if "screenshots" in body: l.screenshots = body["screenshots"]
+    if "tags" in body: l.tags = body["tags"]
+    if "sdlc" in body: l.sdlc = body["sdlc"]
+    if "business_model" in body: l.business_model = body["business_model"]
+    if "businessModel" in body: l.business_model = body["businessModel"]
+    if "tech_stack" in body: l.tech_stack = body["tech_stack"]
+    if "techStack" in body: l.tech_stack = body["techStack"]
+    if "ai_draft" in body: l.ai_draft = body["ai_draft"]
+    if "aiDraft" in body: l.ai_draft = body["aiDraft"]
+    if "demo_url" in body: l.demo_url = body["demo_url"]
+    if "demoUrl" in body: l.demo_url = body["demoUrl"]
+    if "expires_at" in body or "expiresAt" in body:
+        val = body.get("expires_at") or body.get("expiresAt")
+        if val:
+            l.expires_at = datetime.fromisoformat(val.replace("Z", "+00:00"))
+        else:
+            l.expires_at = None
+            
+    db.add(l)
+    await db.commit()
+    return {"ok": True}
+
+@router.get("/admin/escrow")
+async def admin_escrow_orders(user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> list[dict]:
+    rows = (await db.execute(select(Order).where(Order.escrow_status != "pending").order_by(Order.created_at.desc()))).scalars().all()
+    return [{"id": o.id, "listing_id": o.listing_id, "amount": o.amount_cents/100, "escrow_status": o.escrow_status, "status": o.status} for o in rows]
+
+@router.post("/admin/escrow/{order_id}/release")
+async def admin_escrow_release(order_id: str, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
+    o = await db.get(Order, order_id)
+    if not o: raise HTTPException(404, "Order not found")
+    o.escrow_status = "released"
+    db.add(o)
+    await db.commit()
+    return {"ok": True}
+
+@router.post("/admin/escrow/{order_id}/refund")
+async def admin_escrow_refund(order_id: str, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
+    o = await db.get(Order, order_id)
+    if not o: raise HTTPException(404, "Order not found")
+    o.escrow_status = "refunded"
+    o.status = "refunded"
+    db.add(o)
+    await db.commit()
+    return {"ok": True}
 
 
 @asynccontextmanager

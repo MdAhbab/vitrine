@@ -12,12 +12,16 @@ import { Sell } from './pages/Sell';
 import { AuthPage } from './pages/Auth';
 import { Pricing } from './pages/Pricing';
 import { Legal } from './pages/Legal';
+import { PublicInfo } from './pages/PublicInfo';
+import { Profile } from './pages/Profile';
 import { BuyerDashboard } from './pages/dashboards/BuyerDashboard';
 import { SellerDashboard } from './pages/dashboards/SellerDashboard';
 import { AdminDashboard } from './pages/dashboards/AdminDashboard';
 import { useTheme } from './lib/theme';
 import { useStore } from './lib/store';
 import type { Product } from './lib/mockData';
+import { api, USE_MOCKS } from './lib/api';
+
 
 type Route =
   | { name: 'home' }
@@ -30,7 +34,9 @@ type Route =
   | { name: 'signup' }
   | { name: 'admin-login' }
   | { name: 'concierge' }
-  | { name: 'legal'; kind: 'terms' | 'privacy' | 'disclaimer' | 'about' | 'press' | 'contact' };
+  | { name: 'profile'; userId?: string }
+  | { name: 'info'; kind: 'whats-new' | 'services' | 'about' }
+  | { name: 'legal'; kind: 'terms' | 'privacy' | 'disclaimer' | 'press' | 'contact' };
 
 function parseHash(): Route {
   const h = window.location.hash.replace(/^#\/?/, '');
@@ -43,7 +49,11 @@ function parseHash(): Route {
   if (h === 'signup') return { name: 'signup' };
   if (h === 'admin-login') return { name: 'admin-login' };
   if (h === 'concierge') return { name: 'concierge' };
-  if (['terms', 'privacy', 'disclaimer', 'about', 'press', 'contact'].includes(h))
+  if (h.startsWith('profile/')) return { name: 'profile', userId: h.slice(8) };
+  if (h === 'profile') return { name: 'profile' };
+  if (['whats-new', 'services', 'about'].includes(h))
+    return { name: 'info', kind: h as 'whats-new' | 'services' | 'about' };
+  if (['terms', 'privacy', 'disclaimer', 'press', 'contact'].includes(h))
     return { name: 'legal', kind: h as any };
   if (h.startsWith('p/')) return { name: 'product', slug: h.slice(2) };
   return { name: 'home' };
@@ -53,11 +63,30 @@ export default function App() {
   useTheme();
   const { user, loadSession } = useStore();
   const [route, setRoute] = useState<Route>(() => parseHash());
+  const [sessionChecked, setSessionChecked] = useState(false);
 
   useEffect(() => {
-    loadSession().catch(console.error);
+    loadSession().catch(console.error).finally(() => setSessionChecked(true));
   }, [loadSession]);
+
   const [previewing, setPreviewing] = useState<Product | null>(null);
+
+  useEffect(() => {
+    if (route.name === 'home' || route.name === 'browse') {
+      if (!USE_MOCKS) {
+        api.recordEvent({ event_type: 'view' }).catch(console.error);
+      }
+    }
+  }, [route.name]);
+
+  useEffect(() => {
+    if (previewing) {
+      if (!USE_MOCKS) {
+        api.recordEvent({ event_type: 'launch', listing_id: previewing.id }).catch(console.error);
+      }
+    }
+  }, [previewing]);
+
   const [concierge, setConcierge] = useState(false);
   const [bargain, setBargain] = useState<Product | null>(null);
   const [features, setFeatures] = useState<Product | null>(null);
@@ -86,8 +115,15 @@ export default function App() {
 
   const go = useCallback((h: string) => { window.location.hash = h.startsWith('/') ? h : `/${h}`; }, []);
 
+  useEffect(() => {
+    if (sessionChecked && route.name === 'sell' && user?.role !== 'seller') {
+      go(user ? '/dashboard' : '/login');
+    }
+  }, [sessionChecked, route.name, user, go]);
+
   const navigate = (name: any) => {
     if (name === 'dashboard' && !user) return go('/login');
+    if (name === 'sell' && user?.role !== 'seller') return go(user ? '/dashboard' : '/login');
     go(`/${name === 'home' ? '' : name}`);
   };
 
@@ -106,12 +142,14 @@ export default function App() {
     return <AdminDashboard />;
   };
 
+  const navRoute = route.name === 'info' ? route.kind : route.name;
+
   return (
     <div className="relative min-h-screen text-text" style={{ background: 'var(--bg)' }}>
       <div className="relative z-10 flex flex-col min-h-screen">
         {route.name !== 'login' && route.name !== 'signup' && route.name !== 'admin-login' && (
           <TopNav
-            route={route.name as any}
+            route={navRoute as any}
             navigate={navigate}
             onConcierge={() => setConcierge(true)}
           />
@@ -148,12 +186,14 @@ export default function App() {
                 onCheckout={(p, tier) => { if (!user) return go('/login'); setCheckout({ p, tier }); }}
               />
             )}
-            {route.name === 'sell' && <Sell onDone={() => navigate('home')} />}
+            {route.name === 'sell' && user?.role === 'seller' && <Sell onDone={() => navigate('home')} />}
             {route.name === 'pricing' && <Pricing onAuth={() => go('/login')} />}
             {route.name === 'dashboard' && renderDashboard()}
+            {route.name === 'profile' && <Profile userId={route.userId} onBack={() => go('/dashboard')} />}
             {route.name === 'login' && <AuthPage mode="login" onDone={() => go('/dashboard')} onSwitch={(m) => go(`/${m === 'admin' ? 'admin-login' : m}`)} />}
             {route.name === 'signup' && <AuthPage mode="signup" onDone={() => go('/dashboard')} onSwitch={(m) => go(`/${m === 'admin' ? 'admin-login' : m}`)} />}
             {route.name === 'admin-login' && <AuthPage mode="admin" onDone={() => go('/dashboard')} onSwitch={(m) => go(`/${m}`)} />}
+            {route.name === 'info' && <PublicInfo kind={route.kind} onBrowse={() => navigate('browse')} />}
             {route.name === 'legal' && <Legal kind={route.kind} />}
           </motion.div>
         </AnimatePresence>

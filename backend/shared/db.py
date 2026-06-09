@@ -63,6 +63,30 @@ async def create_all() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    if settings.is_sqlite:
+        await _sqlite_additive_columns()
+
+
+async def _sqlite_additive_columns() -> None:
+    """Add columns introduced after initial deploy without full re-seed."""
+    from sqlalchemy import text
+
+    alters = [
+        "ALTER TABLE users ADD COLUMN banned_until DATETIME",
+        "ALTER TABLE chat_messages ADD COLUMN attachments JSON DEFAULT '[]'",
+        "ALTER TABLE listings ADD COLUMN expires_at DATETIME",
+        "ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN location VARCHAR(120) DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN theme_default VARCHAR(16) DEFAULT 'dark'",
+        "ALTER TABLE users ADD COLUMN minimal_profile BOOLEAN DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN ai_points INTEGER DEFAULT 100",
+    ]
+    async with engine.begin() as conn:
+        for stmt in alters:
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass  # column already exists
 
 
 async def drop_all() -> None:

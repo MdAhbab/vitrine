@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { motion } from 'motion/react';
-import { Bot, Send, Eye } from 'lucide-react';
-import { useStore, type Role, type Thread } from '../lib/store';
+import { Bot, Send, Eye, Sparkles, Paperclip, FileText } from 'lucide-react';
+import { useStore, type MessageAttachment, type Role } from '../lib/store';
+import { api, mediaUrl, USE_MOCKS } from '../lib/api';
+
+const CHAT_MAX_BYTES = 4 * 1024 * 1024;
 
 export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name: string } }) {
-  const { threads, messages, sendMessage, agentReply } = useStore();
+  const { threads, messages, sendMessage, agentReply, deactivateRep } = useStore();
   const visible = threads.filter((t) => {
     if (role === 'admin') return true;
     if (role === 'buyer') return t.buyerId === viewer.id;
@@ -32,15 +34,41 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
   const active = visible.find((t) => t.id === activeId);
   const msgs = messages.filter((m) => m.threadId === activeId);
   const [input, setInput] = useState('');
+  const [pendingAtt, setPendingAtt] = useState<MessageAttachment | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [msgs.length]);
 
+  const attachFile = async (file: File | null) => {
+    if (!file || USE_MOCKS) return;
+    if (file.size > CHAT_MAX_BYTES) {
+      alert('Attachments must be 4 MB or smaller (images or PDF only).');
+      return;
+    }
+    const ok = file.type.startsWith('image/') || file.type === 'application/pdf';
+    if (!ok) {
+      alert('Only images and PDF files are allowed in chat.');
+      return;
+    }
+    setUploading(true);
+    try {
+      const res = await api.uploadChatAttachment(file);
+      setPendingAtt({ url: res.url, name: res.name, mime: res.mime, kind: res.kind, size: res.size });
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const send = async () => {
-    if (!input.trim() || !active || role === 'admin') return;
-    const { api, USE_MOCKS } = await import('../lib/api');
+    if ((!input.trim() && !pendingAtt) || !active || role === 'admin') return;
+    const attachments = pendingAtt ? [pendingAtt] : [];
     if (USE_MOCKS) {
-      sendMessage(active.id, input, { id: viewer.id, name: viewer.name });
+      sendMessage(active.id, input, { id: viewer.id, name: viewer.name }, attachments);
       setInput('');
+      setPendingAtt(null);
       if (active.isAgent && role === 'seller') {
         setTimeout(() => agentReply(active.id), 600);
       }
@@ -48,13 +76,11 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
     }
 
     try {
-      await sendMessage(active.id, input, { id: viewer.id, name: viewer.name });
+      await sendMessage(active.id, input, { id: viewer.id, name: viewer.name }, attachments);
       setInput('');
-      if (active.isAgent && role === 'seller') {
-        api.negotiate(active.id).catch(() => {});
-      }
-    } catch (e: any) {
-      alert(e.message || "Failed to send message");
+      setPendingAtt(null);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to send message');
     }
   };
 
@@ -109,15 +135,33 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
                 </div>
               </div>
               {active.isAgent && (
-                <span className="font-mono text-[10px] uppercase tracking-wider text-accent hairline border-accent/40 rounded-full px-2 py-1 inline-flex items-center gap-1">
-                  <Bot size={11} />AI rep · budget ${active.agentBudget}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-accent hairline border-accent/40 rounded-full px-2 py-1 inline-flex items-center gap-1">
+                    <Bot size={11} />AI rep · budget ${active.agentBudget}
+                  </span>
+                  {role === 'buyer' && (
+                    <button
+                      onClick={async () => {
+                        if (confirm(`Are you sure you want to deactivate the AI representative for this negotiation?`)) {
+                          await deactivateRep(active.id);
+                        }
+                      }}
+                      className="hairline rounded-lg px-2.5 py-1 text-xs text-text-soft hover:border-danger hover:text-danger hover:bg-danger/5 transition-colors cursor-pointer"
+                    >
+                      Deactivate rep
+                    </button>
+                  )}
+                </div>
               )}
             </header>
 
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-3 max-h-[460px]">
               {msgs.map((m) => {
                 const mine = role !== 'admin' && m.authorId === viewer.id;
+                const featureMatch = m.body.match(/<!-- feature_request_id: ([a-f0-9]+) -->/);
+                const featureRequestId = featureMatch ? featureMatch[1] : null;
+                const cleanBody = m.body.replace(/<!--.*?-->/gs, '').trim();
+
                 return (
                   <div key={m.id} className={mine ? 'flex justify-end' : 'flex'}>
                     <div className="max-w-[78%]">
@@ -128,7 +172,31 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
                       <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                         mine ? 'bg-text text-bg rounded-tr-sm' : m.isAgent ? 'bg-accent/10 hairline border-accent/30 rounded-tl-sm' : 'bg-surface-2 rounded-tl-sm'
                       }`}>
-                        {m.body}
+                        {cleanBody && <div className="whitespace-pre-line">{cleanBody}</div>}
+                        {(m.attachments ?? []).map((a) => (
+                          a.kind === 'pdf' ? (
+                            <a
+                              key={a.url}
+                              href={mediaUrl(a.url)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-2 flex items-center gap-2 text-xs underline opacity-90"
+                            >
+                              <FileText size={14} /> {a.name}
+                            </a>
+                          ) : (
+                            <a key={a.url} href={mediaUrl(a.url)} target="_blank" rel="noreferrer" className="block mt-2">
+                              <img src={mediaUrl(a.url)} alt={a.name} className="max-w-full max-h-48 rounded-lg" />
+                            </a>
+                          )
+                        ))}
+                        {featureRequestId && (
+                          <FeatureRequestBubble
+                            id={featureRequestId}
+                            role={role}
+                            onUpdate={() => loadMessages(activeId!).catch(() => {})}
+                          />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -138,7 +206,30 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
 
             {role !== 'admin' ? (
               <form onSubmit={(e) => { e.preventDefault(); send(); }} className="border-t p-3">
+                {pendingAtt && (
+                  <div className="mb-2 flex items-center gap-2 text-xs hairline rounded-lg px-3 py-2 bg-surface-2/50">
+                    {pendingAtt.kind === 'pdf' ? <FileText size={14} /> : <img src={mediaUrl(pendingAtt.url)} alt="" className="w-8 h-8 rounded object-cover" />}
+                    <span className="truncate flex-1">{pendingAtt.name}</span>
+                    <button type="button" onClick={() => setPendingAtt(null)} className="text-text-muted hover:text-danger text-[10px] uppercase">Remove</button>
+                  </div>
+                )}
                 <div className="hairline rounded-xl bg-surface flex items-end gap-2 p-1.5 focus-within:border-accent transition-colors">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*,application/pdf"
+                    className="hidden"
+                    onChange={(e) => attachFile(e.target.files?.[0] ?? null)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={uploading}
+                    className="w-9 h-9 shrink-0 grid place-items-center rounded-lg hover:bg-surface-2 disabled:opacity-40"
+                    aria-label="Attach file"
+                  >
+                    <Paperclip size={14} />
+                  </button>
                   <textarea
                     rows={1}
                     value={input}
@@ -147,7 +238,7 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
                     placeholder={active.isAgent && role === 'buyer' ? 'Your AI rep is handling this — chime in if you want to adjust.' : 'Write a message…'}
                     className="flex-1 bg-transparent outline-none resize-none text-sm py-2 px-2 max-h-28"
                   />
-                  <button className="w-9 h-9 grid place-items-center rounded-lg bg-text text-bg disabled:opacity-30" disabled={!input.trim()} aria-label="Send">
+                  <button className="w-9 h-9 grid place-items-center rounded-lg bg-text text-bg disabled:opacity-30" disabled={!input.trim() && !pendingAtt} aria-label="Send">
                     <Send size={13} />
                   </button>
                 </div>
@@ -170,4 +261,123 @@ function timeAgo(ts: number) {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+function FeatureRequestBubble({ id, role, onUpdate }: { id: string; role: Role; onUpdate: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [req, setReq] = useState<any>(null);
+  const [quoteVal, setQuoteVal] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api.getFeatureRequest(id)
+      .then((data) => {
+        if (active) setReq(data);
+      })
+      .catch(console.error)
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [id]);
+
+  if (loading) {
+    return <div className="text-[11px] text-text-muted animate-pulse mt-2">Loading feature request details...</div>;
+  }
+  if (!req) {
+    return <div className="text-[11px] text-danger mt-2">Failed to load feature request details.</div>;
+  }
+
+  const handleQuoteSubmit = async () => {
+    if (!quoteVal || isNaN(+quoteVal) || +quoteVal <= 0) {
+      alert("Please enter a valid price");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.quoteFeatureRequest(id, { developer_charge: +quoteVal });
+      const updated = await api.getFeatureRequest(id);
+      setReq(updated);
+      onUpdate();
+    } catch (e: any) {
+      alert(e.message || "Failed to submit quote");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleApprove = async () => {
+    setSubmitting(true);
+    try {
+      await api.approveFeatureRequest(id);
+      const updated = await api.getFeatureRequest(id);
+      setReq(updated);
+      onUpdate();
+    } catch (e: any) {
+      alert(e.message || "Failed to approve quote");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const aiEst = req.estimated_charge_cents ? `$${(req.estimated_charge_cents / 100).toLocaleString()}` : 'N/A';
+  const devQuote = req.developer_charge_cents ? `$${(req.developer_charge_cents / 100).toLocaleString()}` : 'N/A';
+
+  return (
+    <div className="mt-3 p-3.5 rounded-xl bg-surface/80 border border-border-c/30 space-y-3 text-text">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[9px] uppercase tracking-wider text-accent font-semibold flex items-center gap-1">
+          <Sparkles size={10} /> Custom Feature Scope
+        </span>
+        <span className="font-mono text-[8px] uppercase tracking-wider px-2 py-0.5 rounded bg-surface-2/60 border border-border-c/30 text-text-soft">
+          {req.status.replace(/_/g, ' ')}
+        </span>
+      </div>
+
+      <div className="text-xs border-t border-border-c/40 pt-2.5 space-y-2">
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <span className="text-text-muted block text-[9px] uppercase font-mono">AI Estimate</span>
+            <span className="font-mono font-medium">{aiEst}</span>
+          </div>
+          <div>
+            <span className="text-text-muted block text-[9px] uppercase font-mono">Developer Quote</span>
+            <span className="font-mono font-medium">{devQuote}</span>
+          </div>
+        </div>
+      </div>
+
+      {req.status === 'pending_dev_approval' && role === 'seller' && (
+        <div className="border-t border-border-c/40 pt-2.5 flex items-center gap-2">
+          <input
+            type="number"
+            placeholder="Quote ($)"
+            value={quoteVal}
+            onChange={(e) => setQuoteVal(e.target.value)}
+            className="border border-border-c/50 rounded-lg px-2 h-8 text-xs bg-bg outline-none w-24 focus:border-accent text-text font-mono"
+          />
+          <button
+            onClick={handleQuoteSubmit}
+            disabled={submitting}
+            className="bg-accent text-[var(--accent-ink)] rounded-lg px-3 h-8 text-xs font-medium hover:opacity-90 disabled:opacity-50 cursor-pointer"
+          >
+            Quote feature
+          </button>
+        </div>
+      )}
+
+      {req.status === 'pending_buyer_approval' && role === 'buyer' && (
+        <div className="border-t border-border-c/40 pt-2.5">
+          <button
+            onClick={handleApprove}
+            disabled={submitting}
+            className="w-full bg-accent text-[var(--accent-ink)] rounded-lg h-9 text-xs font-medium hover:opacity-90 disabled:opacity-50 cursor-pointer"
+          >
+            Approve & Add to Invoice
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

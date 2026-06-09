@@ -33,7 +33,7 @@ export function ProductCard({
         />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/55 to-transparent pointer-events-none" />
         <div className="absolute top-3 left-3 flex gap-1.5">
-          {product.badges.slice(0, 2).map((b) => <Badge key={b} kind={b} />)}
+          {product.badges.slice(0, 2).map((b) => <Badge key={b} kind={b} overlay={true} />)}
         </div>
         <button
           onClick={(e) => { e.stopPropagation(); onPreview(); }}

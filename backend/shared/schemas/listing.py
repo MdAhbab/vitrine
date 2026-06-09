@@ -84,6 +84,7 @@ class ProductOut(BaseModel):
     # gallery (status==='live' filter) and seller/admin dashboards (ownerId) work.
     status: str = "live"
     ownerId: str = ""
+    expiresAt: str | None = None
 
 
 class ListingCreateIn(BaseModel):
@@ -98,3 +99,24 @@ class IntakeIn(BaseModel):
 
     repo_url: str | None = None
     readme_text: str | None = None
+
+
+class AnalyticsEventIn(BaseModel):
+    event_type: str  # "view" | "launch"
+    listing_id: str | None = None
+    slug: str | None = None
+
+
+class SellerAnalyticsOut(BaseModel):
+    views_14d: int
+    launches_14d: int
+    conversion_rate: float
+    earnings_all_time: float
+    history: list[dict]
+
+
+class AdminAnalyticsOut(BaseModel):
+    views_14d: int
+    launches_14d: int
+    history: list[dict]
+

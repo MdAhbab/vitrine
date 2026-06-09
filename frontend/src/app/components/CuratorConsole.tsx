@@ -1,12 +1,21 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Key, Sparkles, Shield, ToggleLeft, ToggleRight, Plus, Trash2, Eye, EyeOff, Sliders, Mail, Save, Bot, MessageSquare, Receipt, ScrollText, Settings2 } from 'lucide-react';
+import { Key, Sparkles, Shield, ToggleLeft, ToggleRight, Plus, Trash2, Eye, EyeOff, Sliders, Mail, Save, Bot, Receipt, ScrollText, Settings2 } from 'lucide-react';
 import { useStore, type AdminApiKey } from '../lib/store';
+import { toast } from 'sonner';
 
 export function CuratorConsole() {
-  const { adminConfig, updateAdminConfig, addApiKey, toggleApiKey, removeApiKey } = useStore();
-  const [section, setSection] = useState<'instructions' | 'keys' | 'flags' | 'fees' | 'escrow' | 'branding' | 'notes'>('instructions');
+  const { adminConfig, updateAdminConfig, addApiKey, toggleApiKey, removeApiKey, listings, categories, frameworks, forms } = useStore();
+  const [section, setSection] = useState<'instructions' | 'keys' | 'flags' | 'fees' | 'escrow' | 'branding' | 'categories' | 'frameworks' | 'forms' | 'notes'>('instructions');
   const [saved, setSaved] = useState(false);
+
+  const [newCategory, setNewCategory] = useState('');
+  const [newFramework, setNewFramework] = useState('');
+  const [formSchemaText, setFormSchemaText] = useState('');
+
+  useEffect(() => {
+    setFormSchemaText(JSON.stringify(forms, null, 2));
+  }, [forms]);
 
   const sections = [
     { id: 'instructions' as const, label: 'AI instructions', icon: <Bot size={13} /> },
@@ -15,6 +24,9 @@ export function CuratorConsole() {
     { id: 'fees' as const, label: 'Fees & commissions', icon: <Receipt size={13} /> },
     { id: 'escrow' as const, label: 'Escrow', icon: <Shield size={13} /> },
     { id: 'branding' as const, label: 'Branding', icon: <Sparkles size={13} /> },
+    { id: 'categories' as const, label: 'Categories', icon: <Sliders size={13} /> },
+    { id: 'frameworks' as const, label: 'Frameworks', icon: <Sliders size={13} /> },
+    { id: 'forms' as const, label: 'Intake Forms', icon: <ScrollText size={13} /> },
     { id: 'notes' as const, label: 'Curator notes', icon: <ScrollText size={13} /> },
   ];
 
@@ -146,6 +158,169 @@ export function CuratorConsole() {
               <input value={adminConfig.branding.supportEmail} onChange={(e) => updateAdminConfig({ branding: { ...adminConfig.branding, supportEmail: e.target.value } })} onBlur={flash}
                 className="w-full hairline rounded-xl bg-bg px-3 h-11 text-sm font-mono outline-none focus:border-accent" />
             </Field>
+            <Field label="Featured pieces (Hero Showcase)">
+              <div className="mt-2 space-y-2 max-h-60 overflow-y-auto pr-2 scroll-rail">
+                {listings.filter((l) => l.status === 'live').map((l) => {
+                  const isFeatured = (adminConfig.featuredIds || []).includes(l.id);
+                  return (
+                    <label key={l.id} className="flex items-center gap-3 p-2.5 rounded-xl bg-bg/50 hairline hover:border-accent/40 cursor-pointer transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={isFeatured}
+                        onChange={() => {
+                          const current = adminConfig.featuredIds || [];
+                          const next = isFeatured
+                            ? current.filter((id) => id !== l.id)
+                            : [...current, l.id];
+                          updateAdminConfig({ featuredIds: next });
+                          flash();
+                        }}
+                        className="rounded border-border-c text-accent focus:ring-accent"
+                      />
+                      <img src={l.cover} alt="" className="w-8 h-8 rounded object-cover" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{l.name}</div>
+                        <div className="text-xs text-text-muted truncate">{l.category} · ${l.price.toLocaleString()}</div>
+                      </div>
+                    </label>
+                  );
+                })}
+                {listings.filter((l) => l.status === 'live').length === 0 && (
+                  <div className="text-xs text-text-muted py-4 text-center">No live pieces available to feature.</div>
+                )}
+              </div>
+            </Field>
+          </Card>
+        )}
+
+        {section === 'categories' && (
+          <Card title="Categories" hint="Manage software categories shown on Browse and Home pages.">
+            <div className="flex gap-2">
+              <input
+                value={newCategory}
+                onChange={(e) => setNewCategory(e.target.value)}
+                placeholder="New category name (e.g. Security)"
+                className="flex-1 hairline rounded-xl bg-bg px-3 h-11 text-sm outline-none focus:border-accent"
+              />
+              <button
+                onClick={async () => {
+                  if (!newCategory.trim()) return;
+                  if (categories.includes(newCategory.trim())) {
+                    toast.error('Category already exists');
+                    return;
+                  }
+                  await updateAdminConfig({ categories: [...categories, newCategory.trim()] });
+                  setNewCategory('');
+                  flash();
+                }}
+                disabled={!newCategory.trim()}
+                className="bg-text text-bg rounded-xl px-4 h-11 text-sm font-medium inline-flex items-center gap-2 disabled:opacity-40"
+              >
+                <Plus size={13} /> Add
+              </button>
+            </div>
+            <div className="space-y-2 mt-4 max-h-[400px] overflow-y-auto pr-2 scroll-rail">
+              {categories.map((c) => (
+                <div key={c} className="hairline rounded-xl p-3 flex items-center justify-between bg-surface">
+                  <span className="text-sm font-medium">{c}</span>
+                  <button
+                    onClick={async () => {
+                      if (confirm(`Are you sure you want to delete the category "${c}"?`)) {
+                        await updateAdminConfig({ categories: categories.filter((x) => x !== c) });
+                        flash();
+                      }
+                    }}
+                    className="hairline rounded-lg w-8 h-8 grid place-items-center md:hover:border-danger md:hover:text-danger active:border-danger active:text-danger"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              {categories.length === 0 && (
+                <div className="text-xs text-text-muted py-4 text-center">No categories configured.</div>
+              )}
+            </div>
+          </Card>
+        )}
+
+        {section === 'frameworks' && (
+          <Card title="Frameworks" hint="Manage framework filters shown on Browse and Sell pages.">
+            <div className="flex gap-2">
+              <input
+                value={newFramework}
+                onChange={(e) => setNewFramework(e.target.value)}
+                placeholder="New framework name (e.g. SvelteKit)"
+                className="flex-1 hairline rounded-xl bg-bg px-3 h-11 text-sm outline-none focus:border-accent"
+              />
+              <button
+                onClick={async () => {
+                  if (!newFramework.trim()) return;
+                  if (frameworks.includes(newFramework.trim())) {
+                    toast.error('Framework already exists');
+                    return;
+                  }
+                  await updateAdminConfig({ frameworks: [...frameworks, newFramework.trim()] });
+                  setNewFramework('');
+                  flash();
+                }}
+                disabled={!newFramework.trim()}
+                className="bg-text text-bg rounded-xl px-4 h-11 text-sm font-medium inline-flex items-center gap-2 disabled:opacity-40"
+              >
+                <Plus size={13} /> Add
+              </button>
+            </div>
+            <div className="space-y-2 mt-4 max-h-[400px] overflow-y-auto pr-2 scroll-rail">
+              {frameworks.map((f) => (
+                <div key={f} className="hairline rounded-xl p-3 flex items-center justify-between bg-surface">
+                  <span className="text-sm font-medium">{f}</span>
+                  <button
+                    onClick={async () => {
+                      if (confirm(`Are you sure you want to delete the framework "${f}"?`)) {
+                        await updateAdminConfig({ frameworks: frameworks.filter((x) => x !== f) });
+                        flash();
+                      }
+                    }}
+                    className="hairline rounded-lg w-8 h-8 grid place-items-center md:hover:border-danger md:hover:text-danger active:border-danger active:text-danger"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              {frameworks.length === 0 && (
+                <div className="text-xs text-text-muted py-4 text-center">No frameworks configured.</div>
+              )}
+            </div>
+          </Card>
+        )}
+
+        {section === 'forms' && (
+          <Card title="Intake Forms Schema" hint="Edit the YAML/JSON schema structure for intake form fields and sections.">
+            <textarea
+              value={formSchemaText}
+              onChange={(e) => setFormSchemaText(e.target.value)}
+              rows={15}
+              placeholder="Paste FORM_SCHEMA JSON here..."
+              className="w-full hairline rounded-xl bg-bg p-4 text-sm font-mono leading-relaxed outline-none focus:border-accent resize-y"
+            />
+            <button
+              onClick={async () => {
+                try {
+                  const parsed = JSON.parse(formSchemaText);
+                  if (!Array.isArray(parsed)) {
+                    toast.error('Schema must be an array of sections');
+                    return;
+                  }
+                  await updateAdminConfig({ forms: parsed });
+                  toast.success('Form schema updated successfully');
+                  flash();
+                } catch (e) {
+                  toast.error(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`);
+                }
+              }}
+              className="bg-text text-bg rounded-xl px-4 h-11 text-sm font-medium inline-flex items-center gap-2"
+            >
+              <Save size={13} /> Save Form Schema
+            </button>
           </Card>
         )}
 
@@ -226,13 +401,13 @@ function KeyAdder({ onAdd }: { onAdd: (k: Omit<AdminApiKey, 'id' | 'createdAt'>)
       <div className="grid sm:grid-cols-[160px_1fr] gap-2">
         <select value={provider} onChange={(e) => setProvider(e.target.value as AdminApiKey['provider'])}
           className="hairline rounded-xl bg-bg px-3 h-11 text-sm outline-none focus:border-accent">
-          <option value="openai">OpenAI</option>
+          <option value="openai">OpenAI (ChatGPT)</option>
           <option value="anthropic">Anthropic</option>
           <option value="gemini">Google Gemini</option>
-          <option value="mistral">Mistral</option>
-          <option value="cohere">Cohere</option>
+          <option value="grok">xAI Grok</option>
+          <option value="nvidia">Nvidia Nemotron</option>
           <option value="stripe">Stripe</option>
-          <option value="custom">Custom</option>
+          <option value="custom">Custom (OpenAI-compat)</option>
         </select>
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Concierge — backup)"
           className="hairline rounded-xl bg-bg px-3 h-11 text-sm outline-none focus:border-accent" />

@@ -1,54 +1,108 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Crown, GraduationCap, Plus, TrendingUp, Wallet, MessageSquare, Bot, Sparkles } from 'lucide-react';
-import { useStore, PLAN_DETAILS, type SellerPlan, type Listing } from '../../lib/store';
+import { Crown, GraduationCap, Plus, TrendingUp, Wallet, Bot, Sparkles } from 'lucide-react';
+import { toast } from 'sonner';
+import { api, USE_MOCKS } from '../../lib/api';
+import { useStore, PLAN_DETAILS, normalizeListing, type SellerPlan, type Listing } from '../../lib/store';
 import { Inbox } from '../../components/Inbox';
 import { ListingEditor } from '../../components/ListingEditor';
 import { Tabs, Stat, Pill } from './BuyerDashboard';
 
-const series = Array.from({ length: 14 }, (_, i) => ({
+const mockSeries = Array.from({ length: 14 }, (_, i) => ({
   d: `${i + 1}`,
   views: 80 + Math.round(Math.sin(i / 2) * 30 + i * 12 + Math.random() * 10),
   launches: 20 + Math.round(Math.cos(i / 3) * 8 + i * 3),
 }));
 
+
 export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => void; goToSell: () => void }) {
-  const { user, listings, transactions, threads, setUserPlan, toggleStudent, upsertListing } = useStore();
+  const { user, listings, transactions, threads, setUserPlan, toggleStudent, upsertListing, loadData } = useStore();
+  const [payoutBusy, setPayoutBusy] = useState(false);
+  const [analytics, setAnalytics] = useState<any>(null);
+
+  useEffect(() => {
+    if (USE_MOCKS) return;
+    api.sellerAnalytics()
+      .then(setAnalytics)
+      .catch(console.error);
+  }, []);
+
   if (!user) return null;
   const [tab, setTab] = useState<'overview' | 'listings' | 'inbox' | 'payouts' | 'plan'>('overview');
   const [editor, setEditor] = useState<{ listing: Listing; mode: 'view' | 'edit' } | null>(null);
+  const [repostingId, setRepostingId] = useState<string | null>(null);
+
+  const handleRepost = async (id: string) => {
+    setRepostingId(id);
+    try {
+      if (USE_MOCKS) {
+        const listing = listings.find((x) => x.id === id);
+        if (listing) {
+          const nextExpires = new Date();
+          nextExpires.setDate(nextExpires.getDate() + 30);
+          const updated: Listing = {
+            ...listing,
+            status: 'live',
+            expiresAt: nextExpires.toISOString(),
+          };
+          await upsertListing(updated);
+        }
+        toast.success('Listing reposted and optimized with AI!');
+      } else {
+        await api.repostListing(id);
+        await loadData();
+        toast.success('Listing reposted and optimized with AI!');
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to repost listing');
+    } finally {
+      setRepostingId(null);
+    }
+  };
 
   const aiDraftNew = async () => {
-    const draftId = `p_draft_${Math.random().toString(36).slice(2, 8)}`;
-    const cover = listings[0]?.cover ?? '';
-    const seed: Listing = {
-      id: draftId,
-      slug: `new-listing-${draftId}`,
-      name: 'Untitled piece',
-      tagline: '',
-      seller: { name: user.name, handle: `@${user.name.toLowerCase().replace(/\s+/g, '')}`, verified: false },
-      category: 'Dashboards', tags: [], price: 49,
-      tiers: [
-        { name: 'Source', price: 49, features: ['Full source code', 'MIT license', 'Email support'] },
-        { name: 'Source + Setup', price: 129, features: ['Onboarding call', '30 days of fixes'], recommended: true },
-        { name: 'Bespoke', price: 329, features: ['Brand reskin', '90 days of support'] },
-      ],
-      vitrineScore: 70,
-      scoreBreakdown: [
-        { label: 'Completeness', value: 60 }, { label: 'UI craft', value: 60 }, { label: 'Demo health', value: 80 },
-        { label: 'Reviews', value: 0 }, { label: 'Recency', value: 100 }, { label: 'Engagement', value: 40 },
-      ],
-      demoUrl: 'https://vercel.com', demoHealth: 'live', badges: ['new'],
-      screenshots: [cover], cover, ratingDistribution: [0,0,0,0,0], rating: 0, reviewsCount: 0,
-      description: '', spec: [], framework: 'React', license: 'MIT', hasLiveDemo: false,
-      createdAt: new Date().toISOString(),
-      sdlc: { problem: '', solution: '', methodology: '', discussions: '' },
-      businessModel: { kind: 'for-profit', pitch: '', revenueStreams: [] },
-      techStack: [], aiDraft: true,
-      ownerId: user.id, status: 'draft',
-    };
-    upsertListing(seed);
-    setEditor({ listing: seed, mode: 'edit' });
+    if (USE_MOCKS) {
+      const draftId = `p_draft_${Math.random().toString(36).slice(2, 8)}`;
+      const cover = listings[0]?.cover ?? '';
+      const seed: Listing = {
+        id: draftId,
+        slug: `new-listing-${draftId}`,
+        name: 'Untitled piece',
+        tagline: '',
+        seller: { name: user.name, handle: `@${user.name.toLowerCase().replace(/\s+/g, '')}`, verified: false },
+        category: 'Dashboards', tags: [], price: 49,
+        tiers: [
+          { name: 'Source', price: 49, features: ['Full source code', 'MIT license', 'Email support'] },
+          { name: 'Source + Setup', price: 129, features: ['Onboarding call', '30 days of fixes'], recommended: true },
+          { name: 'Bespoke', price: 329, features: ['Brand reskin', '90 days of support'] },
+        ],
+        vitrineScore: 70,
+        scoreBreakdown: [
+          { label: 'Completeness', value: 60 }, { label: 'UI craft', value: 60 }, { label: 'Demo health', value: 80 },
+          { label: 'Reviews', value: 0 }, { label: 'Recency', value: 100 }, { label: 'Engagement', value: 40 },
+        ],
+        demoUrl: 'https://vercel.com', demoHealth: 'live', badges: ['new'],
+        screenshots: [cover], cover, ratingDistribution: [0,0,0,0,0], rating: 0, reviewsCount: 0,
+        description: '', spec: [], framework: 'React', license: 'MIT', hasLiveDemo: false,
+        createdAt: new Date().toISOString(),
+        sdlc: { problem: '', solution: '', methodology: '', discussions: '' },
+        businessModel: { kind: 'for-profit', pitch: '', revenueStreams: [] },
+        techStack: [], aiDraft: true,
+        ownerId: user.id, status: 'draft',
+      };
+      upsertListing(seed);
+      setEditor({ listing: seed, mode: 'edit' });
+      return;
+    }
+    try {
+      const created = await api.createListing({ name: 'Untitled piece', category: 'Dashboards', tagline: '', price: 49 });
+      await api.updateListing(created.id, { ai_draft: true });
+      await loadData();
+      const fresh = useStore.getState().listings.find((l) => l.id === created.id) ?? normalizeListing(created);
+      setEditor({ listing: { ...fresh, aiDraft: true }, mode: 'edit' });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not create draft');
+    }
   };
 
   const plan: SellerPlan = user.plan ?? 'free';
@@ -58,7 +112,14 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
   const repThreads = myThreads.filter((t) => t.isAgent);
   const myTxns = transactions.filter((t) => t.sellerName === user.name || t.sellerId === user.id);
   const grossEarnings = myTxns.reduce((s, t) => s + (t.amount - t.commission), 0);
-  const seededEarnings = myTxns.length ? grossEarnings : 8140;
+  const displayEarnings = analytics ? analytics.earnings_all_time : (myTxns.length ? grossEarnings : 8140);
+  
+  const viewsVal = analytics ? analytics.views_14d.toLocaleString() : "14,328";
+  const launchesVal = analytics ? analytics.launches_14d.toLocaleString() : "1,204";
+  const conversionVal = analytics ? `${analytics.conversion_rate}%` : "3.4%";
+  const chartData = analytics ? analytics.history : mockSeries;
+  
+  const paidAwaitingDelivery = myTxns.filter((t) => t.status === 'paid' && !(t as { delivered?: boolean }).delivered);
   const discount = user.isStudent ? 0.75 : 1;
 
   return (
@@ -99,17 +160,17 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
         {tab === 'overview' && (
           <>
             <div className="grid md:grid-cols-4 gap-4">
-              <Stat k="Views · 14d" v="14,328" icon={<TrendingUp size={14} />} />
-              <Stat k="Launches" v="1,204" icon={<Sparkles size={14} />} />
-              <Stat k="Conversion" v="3.4%" icon={<TrendingUp size={14} />} />
-              <Stat k="Earnings · all time" v={`$${seededEarnings.toLocaleString()}`} icon={<Wallet size={14} />} />
+              <Stat k="Views · 14d" v={viewsVal} icon={<TrendingUp size={14} />} />
+              <Stat k="Launches" v={launchesVal} icon={<Sparkles size={14} />} />
+              <Stat k="Conversion" v={conversionVal} icon={<TrendingUp size={14} />} />
+              <Stat k="Earnings · all time" v={`$${displayEarnings.toLocaleString()}`} icon={<Wallet size={14} />} />
             </div>
             <section className="hairline rounded-2xl bg-surface p-6 mt-6">
               <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Activity · 14 days</div>
               <h2 className="font-serif text-xl mt-1">Views vs. launches</h2>
               <div className="h-64 mt-5 -mx-2">
                 <ResponsiveContainer>
-                  <AreaChart data={series} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
+                  <AreaChart data={chartData} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
                     <defs>
                       <linearGradient id="sg1" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} />
@@ -154,27 +215,44 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
 
         {tab === 'listings' && (
           <div className="space-y-3">
-            {(mine.length ? mine : listings.slice(0, 5)).map((l, i) => (
-              <article key={l.id} className="group hairline rounded-2xl bg-surface p-4 flex items-center gap-4 hover:border-accent/60 transition-colors">
-                <img src={l.cover} alt="" className="w-16 h-16 rounded-lg object-cover" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="font-serif text-lg">{l.name}</div>
-                    {l.aiDraft && <span className="font-mono text-[10px] uppercase tracking-wider text-accent inline-flex items-center gap-1"><Bot size={10} /> draft</span>}
+            {mine.map((l, i) => {
+              const isExpired = l.expiresAt ? new Date(l.expiresAt) < new Date() : false;
+              return (
+                <article key={l.id} className="group hairline rounded-2xl bg-surface p-4 flex items-center gap-4 hover:border-accent/60 transition-colors">
+                  <img src={l.cover} alt="" className="w-16 h-16 rounded-lg object-cover" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="font-serif text-lg">{l.name}</div>
+                      {l.aiDraft && <span className="font-mono text-[10px] uppercase tracking-wider text-accent inline-flex items-center gap-1"><Bot size={10} /> draft</span>}
+                    </div>
+                    <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted mt-1">
+                      {l.category} · {l.framework} · ${l.price.toLocaleString()}
+                      {l.expiresAt && ` · Expires: ${new Date(l.expiresAt).toLocaleDateString()}`}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 items-center">
+                      <Pill kind={isExpired ? 'bad' : l.status === 'live' ? 'good' : l.status === 'in-review' ? 'wait' : l.status === 'rejected' ? 'bad' : 'wait'}>
+                        {isExpired ? 'expired' : l.status}
+                      </Pill>
+                      <span className="text-xs text-text-muted">Score · <span className="font-mono tabular text-text">{l.vitrineScore}</span></span>
+                      <span className="text-xs text-text-muted">Sales · <span className="font-mono tabular text-text">{Math.max(0, 42 - i * 5)}</span></span>
+                    </div>
                   </div>
-                  <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted mt-1">{l.category} · {l.framework} · ${l.price.toLocaleString()}</div>
-                  <div className="mt-2 flex flex-wrap gap-2 items-center">
-                    <Pill kind={l.status === 'live' ? 'good' : l.status === 'in-review' ? 'wait' : l.status === 'rejected' ? 'bad' : 'wait'}>{l.status}</Pill>
-                    <span className="text-xs text-text-muted">Score · <span className="font-mono tabular text-text">{l.vitrineScore}</span></span>
-                    <span className="text-xs text-text-muted">Sales · <span className="font-mono tabular text-text">{Math.max(0, 42 - i * 5)}</span></span>
+                  <div className="flex gap-2">
+                    {isExpired && (
+                      <button
+                        onClick={() => handleRepost(l.id)}
+                        disabled={repostingId === l.id}
+                        className="bg-accent text-[var(--accent-ink)] rounded-lg px-3 h-9 text-sm font-medium hover:opacity-90 inline-flex items-center gap-1.5 transition-opacity disabled:opacity-50"
+                      >
+                        <Bot size={13} /> {repostingId === l.id ? 'Reposting...' : 'Repost with AI'}
+                      </button>
+                    )}
+                    <button onClick={() => setEditor({ listing: l, mode: 'view' })} className="hairline rounded-lg px-3 h-9 text-sm hover:border-accent">View</button>
+                    <button onClick={() => setEditor({ listing: l, mode: 'edit' })} className="hairline rounded-lg px-3 h-9 text-sm hover:border-accent">Edit</button>
                   </div>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setEditor({ listing: l, mode: 'view' })} className="hairline rounded-lg px-3 h-9 text-sm hover:border-accent">View</button>
-                  <button onClick={() => setEditor({ listing: l, mode: 'edit' })} className="hairline rounded-lg px-3 h-9 text-sm hover:border-accent">Edit</button>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
             {mine.length === 0 && (
               <div className="hairline rounded-2xl p-10 text-center">
                 <Bot size={20} className="text-accent mx-auto" />
@@ -194,26 +272,72 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
              <div className="overflow-x-auto">
               <table className="w-full text-sm min-w-[640px]">
                 <thead className="bg-surface-2/60 font-mono text-[10px] uppercase tracking-wider text-text-muted">
-                  <tr><th className="text-left p-4">Order</th><th className="p-4">Buyer</th><th className="p-4 text-right">Gross</th><th className="p-4 text-right">Commission</th><th className="p-4 text-right pr-6">Net</th></tr>
+                  <tr><th className="text-left p-4">Order</th><th className="p-4">Buyer</th><th className="p-4">Status</th><th className="p-4">Escrow</th><th className="p-4 text-right">Gross</th><th className="p-4 text-right">Commission</th><th className="p-4 text-right pr-6">Net</th></tr>
                 </thead>
                 <tbody>
-                  {(myTxns.length ? myTxns : transactions).map((t) => (
+                  {myTxns.map((t) => (
                     <tr key={t.id} className="border-t">
                       <td className="p-4 font-serif">{t.productName}</td>
                       <td className="p-4 text-xs text-text-muted">{t.buyerName}</td>
+                      <td className="p-4">
+                        {t.status === 'paid' && !(t as { delivered?: boolean }).delivered ? (
+                          <button
+                            onClick={async () => {
+                              try {
+                                await api.deliverOrder(t.id, {});
+                                toast.success('Order marked delivered');
+                                await loadData();
+                              } catch (e) {
+                                toast.error(e instanceof Error ? e.message : 'Delivery failed');
+                              }
+                            }}
+                            className="hairline rounded-lg px-2 py-1 text-[10px] uppercase tracking-wider hover:border-accent"
+                          >
+                            Mark delivered
+                          </button>
+                        ) : (
+                          <Pill kind={t.status === 'paid' || (t as { delivered?: boolean }).delivered ? 'good' : 'wait'}>{(t as { delivered?: boolean }).delivered ? 'delivered' : t.status}</Pill>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        {t.escrow_status ? <Pill kind={t.escrow_status === 'released' ? 'good' : t.escrow_status === 'holding' ? 'wait' : 'bad'}>{t.escrow_status}</Pill> : <span className="text-text-muted text-xs">—</span>}
+                      </td>
                       <td className="p-4 text-right font-mono tabular">${t.amount.toLocaleString()}</td>
                       <td className="p-4 text-right font-mono tabular text-danger">−${t.commission.toLocaleString()}</td>
                       <td className="p-4 pr-6 text-right font-mono tabular">${(t.amount - t.commission).toLocaleString()}</td>
                     </tr>
                   ))}
+                  {myTxns.length === 0 && (
+                    <tr><td colSpan={6} className="p-8 text-center text-sm text-text-muted">No orders yet.</td></tr>
+                  )}
                 </tbody>
               </table>
              </div>
             </div>
             <aside className="hairline rounded-2xl bg-surface p-6 h-fit">
               <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Balance</div>
-              <div className="font-serif text-4xl tabular mt-2">${seededEarnings.toLocaleString()}</div>
-              <button className="w-full bg-accent text-[var(--accent-ink)] rounded-xl h-11 font-medium mt-5">Request payout</button>
+              <div className="font-serif text-4xl tabular mt-2">${displayEarnings.toLocaleString()}</div>
+              {paidAwaitingDelivery.length > 0 && (
+                <p className="text-xs text-accent mt-2">{paidAwaitingDelivery.length} order(s) awaiting delivery before payout.</p>
+              )}
+              <button
+                disabled={payoutBusy || displayEarnings <= 0}
+                onClick={async () => {
+                  setPayoutBusy(true);
+                  try {
+                    await api.requestPayout({ amount: displayEarnings, payout_method: 'bank', details: {} });
+                    toast.success('Payout requested');
+                    await loadData();
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'Payout request failed');
+                  } finally {
+                    setPayoutBusy(false);
+                  }
+                }}
+                className="w-full bg-accent text-[var(--accent-ink)] rounded-xl h-11 font-medium mt-5 disabled:opacity-40"
+              >
+                {payoutBusy ? 'Requesting…' : 'Request payout'}
+              </button>
               <p className="text-xs text-text-muted mt-3">Next automatic payout · Friday, 12:00 UTC</p>
             </aside>
           </div>
