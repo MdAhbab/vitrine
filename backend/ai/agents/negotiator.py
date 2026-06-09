@@ -8,7 +8,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from backend.shared.db import SessionLocal
-from backend.shared.models import Chat, ChatMessage, Negotiation, User
+from backend.shared.models import Chat, ChatMessage, Negotiation, User, Order, Listing
 
 from .base import run_agent, system_prompt_for
 
@@ -24,15 +24,48 @@ async def next_message(chat_id: str) -> dict:
         nego = (await db.execute(
             select(Negotiation).where(Negotiation.chat_id == chat_id))).scalar_one_or_none()
         buyer = await db.get(User, chat.buyer_id)
-        last = (await db.execute(
-            select(ChatMessage).where(ChatMessage.chat_id == chat_id)
-            .order_by(ChatMessage.created_at.desc()).limit(1))).scalar_one_or_none()
+        
+        # Fetch buyer's past orders
+        orders_stmt = select(Order).where(Order.buyer_id == chat.buyer_id)
+        orders = (await db.execute(orders_stmt)).scalars().all()
+        orders_summary = [
+            f"Order: Product ID {o.listing_id}, Price ${o.amount_cents/100:.2f}, Status {o.status}"
+            for o in orders
+        ]
+        orders_text = "\n".join(orders_summary) if orders_summary else "No previous orders."
+        
+        # Fetch listing details
+        listing = await db.get(Listing, chat.listing_id)
+        listing_details = ""
+        if listing:
+            listing_details = (
+                f"Product: {listing.name}\n"
+                f"Original Price: ${listing.price_cents/100:.2f}\n"
+                f"Rating: {listing.rating} ({listing.reviews_count} reviews)\n"
+                f"Category: {listing.category}\n"
+                f"Tech Stack: {listing.tech_stack}\n"
+            )
+            
+        # Fetch message history
+        msgs_stmt = select(ChatMessage).where(ChatMessage.chat_id == chat_id).order_by(ChatMessage.created_at.asc())
+        history_msgs = (await db.execute(msgs_stmt)).scalars().all()
+        history_text = "\n".join([f"{m.sender_name}: {m.text}" for m in history_msgs])
 
         budget = (chat.agent_budget_cents or 0) / 100
         context = nego.buyer_readme_context if nego else ""
-        prompt = (f"Buyer {buyer.display_name if buyer else ''}. Authorized budget ${budget}. "
-                  f"Brief: {context}. Seller's last message: "
-                  f"{last.text if last else '(none)'}. Write the next negotiation message.")
+        
+        prompt = (
+            f"You are negotiating on behalf of the buyer {buyer.display_name if buyer else 'Buyer'}.\n"
+            f"Buyer constraints & target: Authorized Max Budget is ${budget}.\n"
+            f"Product Context:\n{listing_details}\n"
+            f"Buyer's Custom Product Context/Readme Brief:\n{context}\n"
+            f"Buyer's Past Orders & History:\n{orders_text}\n"
+            f"Conversation History:\n{history_text}\n\n"
+            f"Draft the next negotiation message to the seller. Disclose clearly that you are the buyer's AI Representative. "
+            f"Be warm but firm. Propose a specific price offer or custom milestone terms that are within the budget and align with the context. "
+            f"Do not exceed the authorized budget of ${budget} under any circumstances."
+        )
+        
         result = await run_agent("negotiator", SYSTEM, prompt, trigger="api")
 
         msg = ChatMessage(chat_id=chat_id, sender_id="agent",

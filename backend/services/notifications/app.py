@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.shared.db import SessionLocal, get_session
 from backend.shared.events import bus
-from backend.shared.models import Notification
+from backend.shared.models import Notification, Listing, Chat
 from backend.shared.security import Principal, current_user
 
 router = APIRouter(tags=["notifications"])
@@ -42,8 +42,56 @@ async def _on_order_paid(event: dict) -> None:
         await db.commit()
 
 
+async def _on_listing_flagged(event: dict) -> None:
+    p = event["payload"]
+    async with SessionLocal() as db:
+        listing = await db.get(Listing, p["listing_id"])
+        if listing:
+            db.add(Notification(
+                user_id=listing.owner_id, kind="listing.flagged",
+                title="Your listing has been flagged",
+                body=f"Your listing '{listing.name}' has been flagged: {p.get('reason', 'no reason provided')}",
+                meta={"listing_id": listing.id, "reason": p.get("reason")},
+            ))
+            await db.commit()
+
+
+async def _on_review_created(event: dict) -> None:
+    p = event["payload"]
+    async with SessionLocal() as db:
+        listing = await db.get(Listing, p["listing_id"])
+        if listing:
+            db.add(Notification(
+                user_id=listing.owner_id, kind="review.created",
+                title="New review received",
+                body=f"Your listing '{listing.name}' has received a new review.",
+                meta={"listing_id": listing.id},
+            ))
+            await db.commit()
+
+
+async def _on_chat_message_sent(event: dict) -> None:
+    p = event["payload"]
+    chat_id = p["chat_id"]
+    sender_id = p["sender_id"]
+    async with SessionLocal() as db:
+        chat = await db.get(Chat, chat_id)
+        if chat:
+            # Send notification to the other party
+            recipient_id = chat.seller_id if (sender_id == chat.buyer_id or sender_id == "agent") else chat.buyer_id
+            db.add(Notification(
+                user_id=recipient_id, kind="chat.message_sent",
+                title="New message received",
+                body="You have a new message in your chat thread.",
+                meta={"chat_id": chat_id},
+            ))
+            await db.commit()
+
+
 bus.subscribe("order.paid", _on_order_paid)
-# TODO: subscribe("listing.flagged"), subscribe("review.created"), subscribe("chat.message_sent")
+bus.subscribe("listing.flagged", _on_listing_flagged)
+bus.subscribe("review.created", _on_review_created)
+bus.subscribe("chat.message_sent", _on_chat_message_sent)
 
 
 app = FastAPI(title="Vitrine notifications")

@@ -20,16 +20,32 @@ router = APIRouter(tags=["search"])
 
 
 @router.get("/search")
-async def search(q: str = "", db: AsyncSession = Depends(get_session)) -> list[dict]:
+async def search(
+    q: str = "",
+    category: str | None = None,
+    price_max: float | None = None,
+    has_demo: bool | None = None,
+    db: AsyncSession = Depends(get_session)
+) -> list[dict]:
+    stmt = select(Listing).where(Listing.status == "live")
+    if category:
+        stmt = stmt.where(Listing.category == category)
+    if price_max is not None:
+        stmt = stmt.where(Listing.price_cents <= int(price_max * 100))
+    if has_demo is not None:
+        if has_demo:
+            stmt = stmt.where(Listing.demo_url.isnot(None))
+        else:
+            stmt = stmt.where(Listing.demo_url.is_(None))
+
     if not q:
-        stmt = select(Listing).where(Listing.status == "live")
         stmt = stmt.order_by(Listing.vitrine_score.desc()).limit(40)
         rows = (await db.execute(stmt)).scalars().all()
         return [{"id": r.id, "slug": r.slug, "name": r.name, "score": r.vitrine_score} for r in rows]
 
     try:
         query_vec = await client.embed(q)
-        matches = await vector_store.search(db, query_vec, k=40)
+        matches = await vector_store.search(db, query_vec, k=100)
         
         listing_ids = [m[0] for m in matches]
         scores = {m[0]: m[1] for m in matches}
@@ -37,7 +53,7 @@ async def search(q: str = "", db: AsyncSession = Depends(get_session)) -> list[d
         if not listing_ids:
             return []
             
-        stmt = select(Listing).where(Listing.id.in_(listing_ids), Listing.status == "live")
+        stmt = stmt.where(Listing.id.in_(listing_ids))
         rows = (await db.execute(stmt)).scalars().all()
         
         res = []
@@ -49,9 +65,9 @@ async def search(q: str = "", db: AsyncSession = Depends(get_session)) -> list[d
                 "score": scores.get(r.id, 0.0)
             })
         res.sort(key=lambda x: x["score"], reverse=True)
-        return res
+        return res[:40]
     except Exception:
-        stmt = select(Listing).where((Listing.name.ilike(f"%{q}%")) | (Listing.tagline.ilike(f"%{q}%")), Listing.status == "live")
+        stmt = stmt.where((Listing.name.ilike(f"%{q}%")) | (Listing.tagline.ilike(f"%{q}%")))
         stmt = stmt.order_by(Listing.vitrine_score.desc()).limit(40)
         rows = (await db.execute(stmt)).scalars().all()
         return [{"id": r.id, "slug": r.slug, "name": r.name, "score": r.vitrine_score} for r in rows]

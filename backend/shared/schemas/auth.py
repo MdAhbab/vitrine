@@ -31,3 +31,7 @@ class UserOut(BaseModel):
     avatar: str | None = None
     isStudent: bool = False
     plan: str | None = None
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str

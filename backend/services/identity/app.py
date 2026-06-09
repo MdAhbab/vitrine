@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.shared.db import get_session
 from backend.shared.events import bus
 from backend.shared.models import User
-from backend.shared.schemas.auth import LoginIn, SignupIn, TokenOut, UserOut
+from backend.shared.schemas.auth import LoginIn, SignupIn, TokenOut, UserOut, RefreshIn
 from backend.shared.security import (
     Principal,
     current_user,
@@ -21,6 +21,7 @@ from backend.shared.security import (
     make_access_token,
     make_refresh_token,
     verify_password,
+    decode_token,
 )
 
 router = APIRouter(tags=["identity"])
@@ -71,6 +72,17 @@ async def admin_login(body: LoginIn, db: AsyncSession = Depends(get_session)) ->
     u = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
     if not u or u.role != "admin" or not verify_password(body.password, u.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid admin credentials")
+    return await _issue(u)
+
+
+@router.post("/auth/refresh", response_model=TokenOut)
+async def refresh(body: RefreshIn, db: AsyncSession = Depends(get_session)) -> TokenOut:
+    claims = decode_token(body.refresh_token)
+    if claims.get("kind") != "refresh":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not a refresh token")
+    u = await db.get(User, claims["sub"])
+    if not u:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
     return await _issue(u)
 
 
