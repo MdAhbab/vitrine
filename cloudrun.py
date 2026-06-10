@@ -411,12 +411,15 @@ def setup_backend(seed: bool) -> None:
               f"{pip_env} {pip} install -r {APP_DIR}/backend/requirements.txt"],
              timeout=900)
 
-    # DB role + database + pgvector
-    sudo(["-u", "postgres", "psql", "-c",
-          "CREATE ROLE vitrine LOGIN PASSWORD 'vitrine';"])
-    sudo(["-u", "postgres", "psql", "-c", "CREATE DATABASE vitrine OWNER vitrine;"])
-    sudo(["-u", "postgres", "psql", "-d", "vitrine", "-c",
-          "CREATE EXTENSION IF NOT EXISTS vector;"])
+    # DB role + database + pgvector (only if using Postgres)
+    env_vars = _read_env(APP_DIR / ".env")
+    db_url = env_vars.get("DATABASE_URL", "")
+    if "postgresql" in db_url:
+        sudo(["-u", "postgres", "psql", "-c",
+              "CREATE ROLE vitrine LOGIN PASSWORD 'vitrine';"], check=False)
+        sudo(["-u", "postgres", "psql", "-c", "CREATE DATABASE vitrine OWNER vitrine;"], check=False)
+        sudo(["-u", "postgres", "psql", "-d", "vitrine", "-c",
+              "CREATE EXTENSION IF NOT EXISTS vector;"], check=False)
     py = f"{APP_DIR}/.venv/bin/python"
     run(["sudo", "-u", APP_USER, f"{APP_DIR}/.venv/bin/alembic", "upgrade", "head"],
         check=False)
