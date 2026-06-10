@@ -420,11 +420,11 @@ def setup_backend(seed: bool) -> None:
         sudo(["-u", "postgres", "psql", "-c", "CREATE DATABASE vitrine OWNER vitrine;"], check=False)
         sudo(["-u", "postgres", "psql", "-d", "vitrine", "-c",
               "CREATE EXTENSION IF NOT EXISTS vector;"], check=False)
-    py = f"{APP_DIR}/.venv/bin/python"
-    run(["sudo", "-u", APP_USER, f"{APP_DIR}/.venv/bin/alembic", "upgrade", "head"],
-        check=False)
+    sudo(["-u", APP_USER, "bash", "-lc",
+          f"cd {APP_DIR} && {APP_DIR}/.venv/bin/alembic upgrade head"], check=False)
     if seed:
-        run(["sudo", "-u", APP_USER, py, f"{APP_DIR}/backend/seed.py"], check=False)
+        sudo(["-u", APP_USER, "bash", "-lc",
+              f"cd {APP_DIR} && {APP_DIR}/.venv/bin/python -m backend.seed"], check=False)
     ok("Backend ready.")
 
 
