@@ -75,6 +75,20 @@ web_modules/
 .venv_*/
 __pycache__/
 *.py[cod]
+
+# Database: the seeded vitrine.db IS committed on purpose (so `git pull` on the
+# VM ships a ready-to-run, seeded database). Only the volatile SQLite sidecars
+# and the empty stray backend copy are ignored.
+*.db-wal
+*.db-shm
+/backend/vitrine.db
+
+# Generated cloud runtime files (written by run_onVM.py on the VM)
+/docker-compose.cloud.yml
+/nginx.conf
+/Caddyfile
+/.env.cloud
+
 # Uploaded media (keep scaffold)
 files/**
 !files/README.md

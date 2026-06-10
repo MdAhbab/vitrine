@@ -1,5 +1,5 @@
 """
-DB bootstrap helper (invoked by localrun.py / cloudrun.py).
+DB bootstrap helper (invoked by run.py locally and the container entrypoint on the VM).
 
     python -m backend.shared.db_setup --ensure        # create tables if missing
     python -m backend.shared.db_setup --drop-create    # wipe + recreate

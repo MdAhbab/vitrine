@@ -1,11 +1,35 @@
+# Keep the build context tiny — anything here is NOT sent to the Docker daemon.
 .git
+.gitignore
 .venv
+.venv_*
 __pycache__
+**/__pycache__
 *.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Frontend deps + build output (the image rebuilds dist in its own stage)
 node_modules
 frontend/node_modules
 frontend/dist
+
+# Secrets / local env (cloud env is generated as .env.cloud on the VM)
 .env
 .env.*
+!.env.example
+
+# Volatile SQLite sidecars — vitrine.db itself IS copied in (the seed DB)
+vitrine.db-wal
+vitrine.db-shm
+backend/vitrine.db
+
+# Uploaded media + docs + misc
 files
+*.md
 .DS_Store
+docker-compose.cloud.yml
+nginx.conf
+Caddyfile

@@ -1,6 +1,6 @@
 # backend.md — Vitrine Backend Plan
 
-> Event-driven service scaffold with a pragmatic current runtime: FastAPI gateway monolith + SQLite/in-memory dev, Dockerized cloud VM deployment, and a later PostgreSQL/pgvector + Redis scale-out path. This document is the implementation blueprint and the deployment runbook for `run.py` and `cloudrun.py`.
+> Event-driven service scaffold with a pragmatic current runtime: FastAPI gateway monolith + SQLite/in-memory dev, Dockerized cloud VM deployment, and a later PostgreSQL/pgvector + Redis scale-out path. This document is the implementation blueprint and the deployment runbook for `run.py` (local) and `run_onVM.py` (cloud).
 
 ## Contents
 1. [Principles & topology](#1-principles--topology)
@@ -16,7 +16,7 @@
 11. [API surface](#11-api-surface)
 12. [Project layout](#12-project-layout)
 13. [Local run (`run.py`)](#13-local-run-runpy)
-14. [Deployment (`cloudrun.py`)](#14-deployment-cloudrunpy)
+14. [Deployment (`run_onVM.py`)](#14-deployment-run_onvmpy)
 15. [Config & env](#15-config--env)
 
 ---
@@ -24,7 +24,7 @@
 ## 1. Principles & topology
 
 - **Microservices, but pragmatic.** Each service still has an independent FastAPI module, but the current development and VM run use the gateway monolith so SQLite and the in-memory event bus work end-to-end.
-- **Docker for cloud.** Locally: `run.py` starts Python + Vite directly. On the VM: `cloudrun.py` builds a Docker image and runs it with a Caddy container through Docker Compose.
+- **Docker for cloud.** Locally: `run.py` starts Python + Vite directly on localhost. On the VM: `run_onVM.py` builds a Docker image and runs it behind an nginx (auto-TLS) container through Docker Compose.
 - **State now, scale later.** Current state is persisted in SQLite and Docker volumes; Postgres/pgvector and Redis remain the later scale-out path.
 - **Cheap & secure by default.** SQLite/in-memory avoids setup friction now; OpenAI calls are budgeted and cached.
 
@@ -370,30 +370,35 @@ python run.py --no-frontend
 
 ---
 
-## 14. Deployment (`cloudrun.py`)
+## 14. Deployment (`run_onVM.py`)
 
-Docker build on a single cloud VM. The default domain is `vitrine.ahbab.dev`.
+Docker build on a single cloud VM. The default domain is `vitrine.ahbab.dev`. The
+intended workflow is just `git pull` (the repo ships a seeded `vitrine.db`) then
+`python3 run_onVM.py` — with no arguments it runs a full deploy.
 
-`cloudrun.py deploy --domain vitrine.ahbab.dev` performs:
+`run_onVM.py` (default action `deploy`) performs:
 
 1. **System packages:** install Docker Engine and the Compose plugin if missing.
-2. **App dir:** sync the current checkout to `/opt/vitrine`.
+2. **App dir:** sync the current checkout to `/opt/vitrine` (keeps `vitrine.db`; excludes the volatile `-wal`/`-shm` sidecars).
 3. **Cloud env:** write `/opt/vitrine/.env.cloud` with `ENV=prod`, `FRONTEND_ORIGIN=https://<domain>`, `DATABASE_URL=sqlite+aiosqlite:////data/vitrine.db`, `EVENT_BUS=memory`, and `CACHE=memory`.
-4. **Docker build:** run `docker compose build --pull app`; the Dockerfile builds Vite in a Node stage and installs/runs FastAPI in a Python runtime stage.
-5. **Runtime:** start two containers: `app` (`gunicorn backend.gateway.app:app`) and `web` (`caddy:2-alpine` for TLS and `/api/*` proxying).
-6. **Persistence:** SQLite lives in the `vitrine-data` Docker volume and uploads live in `vitrine-files`.
-7. **Health:** run `docker compose ps` and an in-container `/health` check.
+4. **Docker build:** run `docker compose build --pull app`; the Dockerfile builds Vite in a Node stage, installs/runs FastAPI in a Python runtime stage, and bakes in the seeded `vitrine.db`.
+5. **Runtime:** start two containers: `app` (`gunicorn backend.gateway.app:app`) and `web` (`jonasal/nginx-certbot` — nginx that auto-provisions and renews Let's Encrypt certs, and proxies `/api/*` with the prefix stripped).
+6. **Seed-on-first-boot:** the entrypoint copies the baked-in `vitrine.db` onto the `/data` volume only when it is empty, so a fresh VM comes up seeded with no extra step; existing data is left untouched.
+7. **Persistence:** SQLite lives in the `vitrine-data` volume, uploads in `vitrine-files`, and Let's Encrypt certs in `nginx-letsencrypt`.
+8. **Disk hygiene:** after every deploy/update the throwaway Node build layers are pruned (`docker image prune` + `docker builder prune`) — this is what keeps the VM footprint small instead of ballooning to ~2 GB.
+9. **Health:** run `docker compose ps` and an in-container `/health` check.
 
 ```bash
-python cloudrun.py deploy --domain vitrine.ahbab.dev [--seed]
-python cloudrun.py update             # resync checkout, rebuild image, restart containers
-python cloudrun.py status             # docker compose ps + app health
-python cloudrun.py logs [app|web]     # docker compose logs -f
-python cloudrun.py rollback           # restart current containers
-python cloudrun.py teardown           # stop containers; add --volumes to delete data
+python3 run_onVM.py                    # full deploy to https://vitrine.ahbab.dev (default)
+python3 run_onVM.py update             # resync checkout, rebuild image, restart containers
+python3 run_onVM.py status             # docker compose ps + app health
+python3 run_onVM.py logs [app|web]     # docker compose logs -f
+python3 run_onVM.py rollback           # restart current containers
+python3 run_onVM.py teardown           # stop containers; add --volumes to delete data
+python3 run_onVM.py --dry-run          # preview every command without running it
 ```
 
-**Topology on the VM:** Caddy container (80/443) -> FastAPI gateway container (`8000`) -> SQLite volume. The gateway serves both API routes and the compiled frontend SPA fallback, so the complete site is available at `https://vitrine.ahbab.dev` once DNS points at the VM.
+**Topology on the VM:** nginx container (80/443, auto-TLS) -> FastAPI gateway container (`8000`, internal `expose` only — never published to the host) -> SQLite volume. The gateway serves both API routes and the compiled frontend SPA fallback, so the complete site is available at `https://vitrine.ahbab.dev` once DNS points at the VM.
 
 > **Managed preview hosting (Phase 4):** keep this Docker-first pattern. Preview workers should build/run seller projects as isolated containers rather than adding native VM builds.
 
@@ -624,7 +629,7 @@ export async function conciergeStream(query: string, onChunk: (c: any) => void) 
 - Gateway sets CORS `allow_origins=[FRONTEND_ORIGIN]`. In dev that's
   `http://localhost:5173`; keep `VITE_API_BASE=http://localhost:8000`.
 - In prod, nginx serves the SPA and proxies `/api/*`→gateway, so set
-  `VITE_API_BASE=/api`. (cloudrun already strips `/api`.)
+  `VITE_API_BASE=/api`. (the nginx config generated by `run_onVM.py` already strips `/api`.)
 - Concierge/negotiate streams pass through nginx with buffering off (already in
   the nginx template, §14).
 

@@ -36,6 +36,11 @@ COPY backend /app/backend
 COPY --from=frontend /src/frontend/dist /app/frontend/dist
 COPY docker/entrypoint.sh /entrypoint.sh
 
+# Ship the seeded database inside the image. The entrypoint copies it onto the
+# /data volume on first boot, so a fresh VM comes up fully seeded with no extra
+# step. An existing volume is left untouched.
+COPY vitrine.db /app/seed/vitrine.db
+
 RUN chmod +x /entrypoint.sh \
     && mkdir -p /data /app/files
 

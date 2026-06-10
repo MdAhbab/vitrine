@@ -360,7 +360,7 @@ Screenshots `[req]`, demo video (optional), GIFs, sample data.
 - **Primary store:** SQLite for the current development server; PostgreSQL + pgvector is the later production search path.
 - **Cache / queues / rate-limit / sessions:** in-memory by default; Redis when the services are split.
 - **Agents:** stateless workers in the AI Orchestration service, subscribing to events, calling OpenAI with typed tools.
-- **Local dev:** one process-manager starts the FastAPI gateway monolith + Vite. **Cloud:** Docker build + Docker Compose with Caddy TLS (see `cloudrun.py`).
+- **Local dev:** one process-manager starts the FastAPI gateway monolith + Vite (localhost only). **Cloud:** Docker build + Docker Compose with nginx + auto Let's Encrypt TLS (see `run_onVM.py`).
 
 ---
 
@@ -430,7 +430,7 @@ $10 + 1–2 days demands a **cheap-but-capable** model and **ruthless cost contr
 | Comms | Redis Streams event bus, REST (+ SSE for streaming chat) |
 | Auth | JWT + RBAC |
 | Payments | Mock provider → Stripe adapter |
-| Deploy | Docker build on a cloud VM: FastAPI gateway image + Caddy container |
+| Deploy | Docker build on a cloud VM: FastAPI gateway image + nginx (auto Let's Encrypt TLS) container |
 
 ---
 
@@ -441,9 +441,9 @@ vitrine/
 ├── README.md              ← this file (master plan)
 ├── AGENTS.md              ← agent roster, tools, memory, workflows
 ├── backend.md             ← backend architecture, data model, deploy
-├── run.py                 ← local dev orchestration (services + Vite; cloud dispatch)
-├── cloudrun.py            ← Docker cloud VM deploy (Compose + Caddy TLS)
-├── Dockerfile             ← full app image (Vite build + FastAPI gateway)
+├── run.py                 ← local dev orchestration (services + Vite, localhost only)
+├── run_onVM.py            ← Docker cloud VM deploy (Compose + nginx auto-TLS)
+├── Dockerfile             ← full app image (Vite build + FastAPI gateway + seeded DB)
 ├── .env.example
 ├── backend/
 │   ├── gateway/           ├── services/{identity,catalog,search,
@@ -476,18 +476,21 @@ python run.py --no-frontend       # API only
 ```
 
 ### Deploy to a cloud VM (Docker build)
+On the VM, just pull the repo (it ships a seeded `vitrine.db`) and run one file:
 ```bash
-python run.py cloud       # deploys to vitrine.ahbab.dev by default
-# or directly on the VM:
-python cloudrun.py deploy --domain vitrine.ahbab.dev
+git pull
+python3 run_onVM.py       # full auto-deploy to https://vitrine.ahbab.dev
 ```
-`cloudrun.py`:
+`run_onVM.py`:
 1. installs Docker and the Compose plugin if missing,
 2. syncs the checkout to `/opt/vitrine`,
-3. writes `.env.cloud`, `Caddyfile`, and `docker-compose.cloud.yml`,
+3. writes `.env.cloud`, `nginx.conf`, and `docker-compose.cloud.yml`,
 4. runs `docker compose build` so Python and Vite build inside Docker,
-5. starts the FastAPI gateway app container and the Caddy TLS container,
-6. persists SQLite and uploaded files in Docker volumes and runs health checks.
+5. starts the FastAPI gateway app container and the nginx container (automatic Let's Encrypt TLS),
+6. seeds `/data/vitrine.db` from the database baked into the image on first boot (no separate seed step),
+7. persists SQLite and uploaded files in Docker volumes, prunes the throwaway build layers to reclaim disk, and runs health checks.
+
+Day-2 ops: `python3 run_onVM.py update` (resync + rebuild + restart), `status`, `logs [app|web]`, `rollback`, `teardown [--volumes]`. Add `--dry-run` to preview the commands anywhere.
 
 Full flags and the deployment topology are documented in [backend.md](./backend.md#deployment).
 
