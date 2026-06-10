@@ -80,17 +80,27 @@ def warn(m: str) -> None: print(c("! ", "33") + m)
 def die(m: str) -> None:  sys.exit(c("✗ ", "31") + m)
 
 
-def run(cmd: list[str] | str, *, shell: bool = False, check: bool = True) -> int:
+def run(
+    cmd: list[str] | str,
+    *,
+    shell: bool = False,
+    check: bool = True,
+    timeout: int | None = None,
+) -> int:
     pretty = cmd if isinstance(cmd, str) else " ".join(cmd)
     if DRY:
         print(c("  [dry-run] ", "90") + pretty)
         return 0
     info(pretty)
-    return subprocess.run(cmd, shell=shell, check=check).returncode
+    try:
+        return subprocess.run(cmd, shell=shell, check=check, timeout=timeout).returncode
+    except subprocess.TimeoutExpired:
+        die(f"Command timed out after {timeout}s: {pretty}")
+        return 1  # unreachable but satisfies type checker
 
 
-def sudo(cmd: list[str], *, check: bool = True) -> int:
-    return run(["sudo", *cmd], check=check)
+def sudo(cmd: list[str], *, check: bool = True, timeout: int | None = None) -> int:
+    return run(["sudo", *cmd], check=check, timeout=timeout)
 
 
 def write_file(path: Path, content: str, *, root: bool = False, mode: str | None = None) -> None:
@@ -330,10 +340,10 @@ def install_system_packages() -> None:
     info("Installing system packages (idempotent)...")
     sudo(["apt-get", "update", "-y"])
     pkgs = [
-        "python3.11", "python3.11-venv", "python3-pip",
-        "postgresql", "postgresql-contrib", "postgresql-15-pgvector",
+        "python3", "python3-venv", "python3-pip",
+        "postgresql", "postgresql-contrib", "postgresql-18-pgvector",
         "redis-server", "caddy", "nginx", "certbot", "python3-certbot-nginx",
-        "git", "curl", "build-essential",
+        "git", "curl", "build-essential", "rsync",
     ]
     sudo(["apt-get", "install", "-y", *pkgs])
     # Node via NodeSource (LTS)
@@ -374,12 +384,33 @@ def ensure_runtime_env(domain: str) -> None:
 
 def setup_backend(seed: bool) -> None:
     info("Setting up backend venv + database + migrations...")
-    sudo(["-u", APP_USER, "python3.11", "-m", "venv", f"{APP_DIR}/.venv"])
+    sudo(["-u", APP_USER, "python3", "-m", "venv", f"{APP_DIR}/.venv"])
     pip = f"{APP_DIR}/.venv/bin/pip"
-    sudo(["-u", APP_USER, pip, "install", "-q", "--upgrade", "pip"])
+
+    # Upgrade pip first (visible output, 120 s max)
+    sudo(["-u", APP_USER, pip, "install", "--upgrade", "pip"],
+         timeout=120)
+
+    # tiktoken requires Rust/cargo to build its C extension.
+    # Use system-wide apt install so cargo is on PATH for ALL subprocesses
+    # (rustup installs per-user and pip's build env can't find it).
+    cargo_check = subprocess.run(
+        ["which", "cargo"], capture_output=True,
+    )
+    if cargo_check.returncode != 0:
+        info("Rust/cargo not found — installing system-wide via apt...")
+        sudo(["apt-get", "install", "-y", "rustc", "cargo"], timeout=300)
+
     if (APP_DIR / "backend" / "requirements.txt").exists() or DRY:
-        sudo(["-u", APP_USER, pip, "install", "-q", "-r",
-              f"{APP_DIR}/backend/requirements.txt"])
+        info("Installing Python dependencies (this may take several minutes)...")
+        # Explicitly inject cargo paths so pip build subprocesses find the compiler.
+        # Covers both system cargo (/usr/bin) and any rustup install (~/.cargo/bin).
+        cargo_bin = f"/home/{APP_USER}/.cargo/bin"
+        pip_env = f"PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 PATH={cargo_bin}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        sudo(["-u", APP_USER, "bash", "-lc",
+              f"{pip_env} {pip} install -r {APP_DIR}/backend/requirements.txt"],
+             timeout=900)
+
     # DB role + database + pgvector
     sudo(["-u", "postgres", "psql", "-c",
           "CREATE ROLE vitrine LOGIN PASSWORD 'vitrine';"])
