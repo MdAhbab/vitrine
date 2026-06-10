@@ -427,8 +427,33 @@ def dispatch_cloud(argv: list[str]) -> int:
     script = ROOT / "cloudrun.py"
     if not script.exists():
         die("Missing cloudrun.py next to run.py.")
-    if not argv or argv[0].startswith("-"):
-        argv = ["deploy", *argv]
+    commands = {"deploy", "update", "status", "logs", "rollback", "teardown"}
+    global_flags = {"--dry-run"}
+    global_opts = {"--app-dir", "--user", "--proxy", "--gateway-port"}
+    if not argv:
+        argv = ["deploy"]
+    elif argv[0] not in commands:
+        cloud_globals: list[str] = []
+        rest: list[str] = []
+        i = 0
+        while i < len(argv):
+            arg = argv[i]
+            if arg in global_flags or any(arg.startswith(f"{flag}=") for flag in global_flags):
+                cloud_globals.append(arg)
+                i += 1
+            elif arg in global_opts:
+                cloud_globals.extend(argv[i:i + 2])
+                i += 2
+            elif any(arg.startswith(f"{opt}=") for opt in global_opts):
+                cloud_globals.append(arg)
+                i += 1
+            else:
+                rest = argv[i:]
+                break
+        if rest and rest[0] in commands:
+            argv = [*cloud_globals, *rest]
+        else:
+            argv = [*cloud_globals, "deploy", *rest]
     return subprocess.call([sys.executable, str(script), *argv])
 
 

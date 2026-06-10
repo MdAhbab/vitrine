@@ -75,12 +75,6 @@ web_modules/
 .venv_*/
 __pycache__/
 *.py[cod]
-# SQLite dev database (+ WAL sidecars)
-*.db
-*.db-shm
-*.db-wal
-vitrine.db
-
 # Uploaded media (keep scaffold)
 files/**
 !files/README.md

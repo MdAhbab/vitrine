@@ -15,8 +15,10 @@ zero setup. See backend.md §"Step-by-step".
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.shared.settings import settings
@@ -91,3 +93,16 @@ app.mount("/files", StaticFiles(directory=str(files_dir)), name="files")
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True, "service": "gateway", "env": settings.ENV}
+
+
+frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if frontend_dist.exists():
+    frontend_root = frontend_dist.resolve()
+    index_html = frontend_root / "index.html"
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        candidate = (frontend_root / full_path).resolve()
+        if candidate.is_file() and (candidate == frontend_root or frontend_root in candidate.parents):
+            return FileResponse(candidate)
+        return FileResponse(index_html)

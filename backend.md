@@ -1,6 +1,6 @@
 # backend.md — Vitrine Backend Plan
 
-> Event-driven microservices, **native (no Docker)**, minimal infra: FastAPI + PostgreSQL/pgvector + Redis Streams + an OpenAI agent fleet. This document is the implementation blueprint and the deployment runbook for `run.py` and `cloudrun.py`.
+> Event-driven service scaffold with a pragmatic current runtime: FastAPI gateway monolith + SQLite/in-memory dev, Dockerized cloud VM deployment, and a later PostgreSQL/pgvector + Redis scale-out path. This document is the implementation blueprint and the deployment runbook for `run.py` and `cloudrun.py`.
 
 ## Contents
 1. [Principles & topology](#1-principles--topology)
@@ -23,10 +23,10 @@
 
 ## 1. Principles & topology
 
-- **Microservices, but pragmatic.** Each service is an independent FastAPI app (own port, own module, own DB schema/tables). They share a single Postgres instance (separate schemas) and a single Redis to keep infra tiny and VM-friendly. They communicate **asynchronously via Redis Streams** and **synchronously via the API Gateway** only where a request/response is needed.
-- **No Docker.** Locally: a Python process-manager spawns each uvicorn app + workers + Vite. On the VM: one **systemd unit per service** behind **nginx**.
-- **Stateless services.** All state in Postgres/Redis → services restart freely; workers scale by adding consumer-group members.
-- **Cheap & secure by default.** pgvector avoids a separate vector DB; Redis Streams avoids Kafka; OpenAI calls are budgeted and cached.
+- **Microservices, but pragmatic.** Each service still has an independent FastAPI module, but the current development and VM run use the gateway monolith so SQLite and the in-memory event bus work end-to-end.
+- **Docker for cloud.** Locally: `run.py` starts Python + Vite directly. On the VM: `cloudrun.py` builds a Docker image and runs it with a Caddy container through Docker Compose.
+- **State now, scale later.** Current state is persisted in SQLite and Docker volumes; Postgres/pgvector and Redis remain the later scale-out path.
+- **Cheap & secure by default.** SQLite/in-memory avoids setup friction now; OpenAI calls are budgeted and cached.
 
 ```
         nginx (TLS, static frontend, reverse proxy)
@@ -40,7 +40,8 @@
    ai-orchestrator:8010 (+ N stream-worker processes)
               │
    ┌──────────┴───────────┐
-   │ PostgreSQL (+pgvector)│   Redis (Streams + cache + rate-limit)
+   │ SQLite now            │   In-memory bus/cache now
+   │ Postgres/Redis later  │   for split-service scale-out
    └──────────────────────┘
 ```
 
@@ -229,12 +230,13 @@ class StripeProvider(PaymentProvider): ...   # drop-in later; signed webhooks
 
 ---
 
-## 9. Search (pgvector hybrid)
+## 9. Search (portable now, pgvector later)
 
 - **Index:** on `listing.scored`/`updated`, embed (name + tagline + description + tags) with `text-embedding-3-small` → `listing_embeddings`.
-- **Query:** Buyer Concierge parses NL → filters; `search` service runs **vector ANN** (pgvector, HNSW/IVFFlat) ∪ **SQL facets** ∪ **full-text**, fuses by score, then orders by **Vitrine Score**.
+- **Query now:** Buyer Concierge parses NL → filters; `search` service uses the portable vector-store path and SQL facets, then orders by **Vitrine Score**.
+- **Query later:** Postgres can switch the same `listing_embeddings` flow to pgvector HNSW/IVFFlat ANN.
 - **Facets:** category, subcategory, tags, price range, license, has-demo, theming, frameworks, language.
-- No external search engine — Postgres does it all.
+- No external search engine is required.
 
 ---
 
@@ -347,13 +349,13 @@ backend/
 
 `run.py` is a **native process orchestrator** (no Docker). It:
 
-1. **Preflight:** checks Python 3.11+, Node 18+, `psql`, `redis-cli`; verifies Postgres + Redis are reachable (offers `brew services start` hints on macOS).
+1. **Preflight:** checks Python 3.11+ and Node 18+. Postgres/Redis are only checked if `.env` opts into them.
 2. **Backend env:** creates `.venv`, installs `backend/requirements.txt`.
-3. **Database:** creates DB + role if missing, enables `pgvector` (`CREATE EXTENSION`), runs `alembic upgrade head`; `--seed` runs `seed.py`; `--fresh-db` drops & recreates first.
+3. **Database:** defaults to SQLite via `backend.shared.db_setup --ensure`; `--seed` runs `seed.py`; `--fresh-db` drops & recreates first.
 4. **Frontend:** `npm ci` in `frontend/` when a lockfile is present.
 5. **Launch (concurrently, prefixed logs):**
-   - each service: `uvicorn backend.services.<svc>.app:app --port <port> --reload`
-   - gateway on `:8000`
+   - default monolith gateway: `uvicorn backend.gateway.app:app --port 8000 --reload`
+   - optional split services with `EVENT_BUS=redis` and `--all`
    - `ai-orchestrator` on `:8010` + `N` worker processes (`python -m backend.ai.workers`)
    - frontend: `npm run dev -- --port <port> --strictPort`
 6. **Ports:** picks the next available API/frontend ports if defaults are occupied, then prints the real URLs.
@@ -370,30 +372,30 @@ python run.py --no-frontend
 
 ## 14. Deployment (`cloudrun.py`)
 
-Native build on a single cloud VM (Ubuntu), **no Docker**, **systemd + Caddy/nginx**.
+Docker build on a single cloud VM. The default domain is `vitrine.ahbab.dev`.
 
-`cloudrun.py deploy --domain vitrine.example.com` performs:
+`cloudrun.py deploy --domain vitrine.ahbab.dev` performs:
 
-1. **System packages** (idempotent, `apt`): `python3.11`, `nodejs`, `postgresql`, `postgresql-contrib` (+ `pgvector`), `redis-server`, `caddy`, `nginx`, `certbot`.
-2. **App user & dirs:** `vitrine` system user, `/opt/vitrine`, pull/copy code.
-3. **Backend:** create `.venv`, install deps; create DB/role; enable `pgvector`; `alembic upgrade head`; optional seed.
-4. **Frontend:** `npm ci && npm run build` → static assets to `/opt/vitrine/frontend/dist`.
-5. **systemd units** (one per service + workers), e.g. `vitrine-gateway.service`, `vitrine-catalog.service`, `vitrine-ai.service`, `vitrine-ai-worker@.service` (templated for N workers). Backend served by **gunicorn + uvicorn workers**; `Restart=always`; `EnvironmentFile=/opt/vitrine/.env` (`0600`).
-6. **Proxy + TLS:** Caddy by default (or nginx with certbot). Reverse-proxy `/api/*` → gateway and serve frontend static build.
-7. **SEO assets:** `robots.txt`, `sitemap.xml`, and `ads.txt` are generated with the deployment domain.
-8. **Enable + start** all units; run **health checks**; print status.
+1. **System packages:** install Docker Engine and the Compose plugin if missing.
+2. **App dir:** sync the current checkout to `/opt/vitrine`.
+3. **Cloud env:** write `/opt/vitrine/.env.cloud` with `ENV=prod`, `FRONTEND_ORIGIN=https://<domain>`, `DATABASE_URL=sqlite+aiosqlite:////data/vitrine.db`, `EVENT_BUS=memory`, and `CACHE=memory`.
+4. **Docker build:** run `docker compose build --pull app`; the Dockerfile builds Vite in a Node stage and installs/runs FastAPI in a Python runtime stage.
+5. **Runtime:** start two containers: `app` (`gunicorn backend.gateway.app:app`) and `web` (`caddy:2-alpine` for TLS and `/api/*` proxying).
+6. **Persistence:** SQLite lives in the `vitrine-data` Docker volume and uploads live in `vitrine-files`.
+7. **Health:** run `docker compose ps` and an in-container `/health` check.
 
 ```bash
-python cloudrun.py deploy  --domain vitrine.example.com [--seed] [--workers 3]
-python cloudrun.py update             # git pull, rebuild FE, migrate, restart units
-python cloudrun.py status             # systemctl status for all units + health
-python cloudrun.py logs <service>     # journalctl -u vitrine-<service> -f
-python cloudrun.py rollback           # restart on previous release dir
+python cloudrun.py deploy --domain vitrine.ahbab.dev [--seed]
+python cloudrun.py update             # resync checkout, rebuild image, restart containers
+python cloudrun.py status             # docker compose ps + app health
+python cloudrun.py logs [app|web]     # docker compose logs -f
+python cloudrun.py rollback           # restart current containers
+python cloudrun.py teardown           # stop containers; add --volumes to delete data
 ```
 
-**Topology on the VM:** Caddy/nginx (443) → gateway (`18000` by default) → internal services (`18001+`, bound to `127.0.0.1`); Postgres/Redis local sockets. Everything on one VM keeps cost low; services can later move to separate VMs unchanged (they're already network-addressable).
+**Topology on the VM:** Caddy container (80/443) -> FastAPI gateway container (`8000`) -> SQLite volume. The gateway serves both API routes and the compiled frontend SPA fallback, so the complete site is available at `https://vitrine.ahbab.dev` once DNS points at the VM.
 
-> **Managed preview hosting (Phase 4):** the `hosting` service gains a deploy worker that, for paid listings, clones the seller's repo into `/opt/vitrine/hosted/<id>`, runs the detected build/run commands under a dedicated unprivileged user + its own systemd unit, and exposes it at `https://<slug>.preview.vitrine.app` via an nginx vhost — **billed by duration** (a timer unit tears it down at expiry). Same native, no-Docker pattern.
+> **Managed preview hosting (Phase 4):** keep this Docker-first pattern. Preview workers should build/run seller projects as isolated containers rather than adding native VM builds.
 
 ---
 
@@ -405,7 +407,9 @@ python cloudrun.py rollback           # restart on previous release dir
 # core
 ENV=local
 SECRET_KEY=change-me
-DATABASE_URL=postgresql+asyncpg://vitrine:vitrine@localhost:5432/vitrine
+DATABASE_URL=sqlite+aiosqlite:///./vitrine.db
+EVENT_BUS=memory
+CACHE=memory
 REDIS_URL=redis://localhost:6379/0
 FRONTEND_ORIGIN=http://localhost:5173
 
@@ -715,8 +719,8 @@ No model or endpoint code changes required.
 - Real Stripe provider + signed webhooks.
 
 ### Phase 5 — Managed preview hosting ▢ (see §14)
-- `hosting` deploy worker: clone → native build/run under its own systemd unit →
-  `*.preview.vitrine.app` vhost → duration-billed teardown timer.
+- `hosting` deploy worker: clone -> Docker build/run in an isolated container ->
+  `*.preview.vitrine.app` route -> duration-billed teardown timer.
 
 ---
 

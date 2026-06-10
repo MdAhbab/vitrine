@@ -325,7 +325,7 @@ Screenshots `[req]`, demo video (optional), GIFs, sample data.
 
 ## 8. System Architecture
 
-**Event-driven microservices**, native (no Docker), minimal moving parts. Full detail in [backend.md](./backend.md).
+**Pragmatic gateway monolith now, Dockerized cloud deployment, microservice modules ready for later scale-out.** Full detail in [backend.md](./backend.md).
 
 ```
                          ┌──────────────────────────────────────────────┐
@@ -337,7 +337,7 @@ Screenshots `[req]`, demo video (optional), GIFs, sample data.
                 ▼                      ▼                ▼
         ┌──────────────┐      ┌──────────────┐   ┌──────────────┐
         │ Identity/Auth│      │   Catalog    │   │   Search     │
-        │   service    │      │  (listings)  │   │ (pgvector)   │
+        │   service    │      │  (listings)  │   │  (portable)  │
         └──────────────┘      └──────┬───────┘   └──────────────┘
                                      │
         ┌──────────────┐      ┌──────┴───────┐   ┌──────────────┐
@@ -351,16 +351,16 @@ Screenshots `[req]`, demo video (optional), GIFs, sample data.
         └──────────────┘      └──────────────┘
 
    ╔══════════════════════════════════════════════════════════════╗
-   ║   Redis Streams  =  event bus  +  cache  +  rate-limit         ║
-   ║   PostgreSQL + pgvector  =  primary store  +  vector search    ║
+   ║   SQLite volume  =  current dev/cloud primary store             ║
+   ║   In-memory bus/cache now; Redis/Postgres+pgvector later         ║
    ╚══════════════════════════════════════════════════════════════╝
 ```
 
-- **Event bus:** Redis Streams (lightweight, no Kafka, no Docker). Events like `listing.created`, `listing.enriched`, `order.paid`.
-- **Primary store:** PostgreSQL; **pgvector** extension gives semantic search without a separate vector DB.
-- **Cache / queues / rate-limit / sessions:** Redis.
+- **Event bus:** in-memory for the current monolith dev/cloud run; Redis Streams is the later scale-out path.
+- **Primary store:** SQLite for the current development server; PostgreSQL + pgvector is the later production search path.
+- **Cache / queues / rate-limit / sessions:** in-memory by default; Redis when the services are split.
 - **Agents:** stateless workers in the AI Orchestration service, subscribing to events, calling OpenAI with typed tools.
-- **Local dev:** one process-manager spawns each service (uvicorn per service) + workers + Vite. **Cloud:** native systemd services behind Caddy/nginx (see `cloudrun.py`).
+- **Local dev:** one process-manager starts the FastAPI gateway monolith + Vite. **Cloud:** Docker build + Docker Compose with Caddy TLS (see `cloudrun.py`).
 
 ---
 
@@ -376,7 +376,7 @@ Screenshots `[req]`, demo video (optional), GIFs, sample data.
 ### How OpenAI is integrated
 - **Function/tool calling** for every agent — typed JSON in/out, validated with Pydantic, so the model fills the form sheet and returns structured verdicts rather than prose.
 - **Structured outputs / JSON mode** to guarantee parseable results.
-- **Embeddings** power the Buyer Concierge's hybrid semantic search (pgvector) and category suggestions.
+- **Embeddings** power the Buyer Concierge's hybrid semantic search and category suggestions, with SQLite brute-force now and pgvector available later.
 - **Vision** for the one-time UI quality score feeding the Vitrine Score.
 - **Streaming** responses for the Buyer Concierge chat.
 
@@ -425,12 +425,12 @@ $10 + 1–2 days demands a **cheap-but-capable** model and **ruthless cost contr
 |---|---|
 | Frontend | **React + Vite + TypeScript + Tailwind CSS**, Framer Motion, TanStack Query, Zustand |
 | Backend | **FastAPI** (Python 3.11+), Pydantic v2, SQLAlchemy 2.0, Alembic |
-| Data | **PostgreSQL + pgvector**, **Redis** (Streams/cache/rate-limit) |
+| Data | **SQLite + in-memory bus/cache now**, PostgreSQL + pgvector and Redis later |
 | AI | **OpenAI** `gpt-4o-mini`, `text-embedding-3-small`, tool calling, vision, embeddings |
 | Comms | Redis Streams event bus, REST (+ SSE for streaming chat) |
 | Auth | JWT + RBAC |
 | Payments | Mock provider → Stripe adapter |
-| Deploy | Native cloud VM: uvicorn/gunicorn + systemd + Caddy/nginx (no Docker) |
+| Deploy | Docker build on a cloud VM: FastAPI gateway image + Caddy container |
 
 ---
 
@@ -442,7 +442,8 @@ vitrine/
 ├── AGENTS.md              ← agent roster, tools, memory, workflows
 ├── backend.md             ← backend architecture, data model, deploy
 ├── run.py                 ← local dev orchestration (services + Vite; cloud dispatch)
-├── cloudrun.py            ← native cloud VM deploy (systemd + Caddy/nginx)
+├── cloudrun.py            ← Docker cloud VM deploy (Compose + Caddy TLS)
+├── Dockerfile             ← full app image (Vite build + FastAPI gateway)
 ├── .env.example
 ├── backend/
 │   ├── gateway/           ├── services/{identity,catalog,search,
@@ -456,14 +457,14 @@ vitrine/
 
 ## 13. How to Run
 
-> **Prerequisites (native, no Docker):** Python 3.11+, Node 18+, PostgreSQL 15+ (with the `pgvector` extension), Redis 7+, and an `OPENAI_API_KEY`. Copy `.env.example` → `.env` and fill it in.
+> **Local prerequisites:** Python 3.11+, Node 18+, and optionally an `OPENAI_API_KEY`. Copy `.env.example` to `.env` and fill it in. The default development server uses SQLite plus in-memory bus/cache, so Postgres and Redis are not required.
 
 ### One command — local
 ```bash
 python run.py            # defaults to local; bootstraps + starts everything
 ```
 `run.py`:
-1. checks prerequisites (Python/Node/Postgres/Redis),
+1. checks prerequisites (Python/Node; Postgres/Redis only if you opt into them),
 2. creates a virtualenv + installs `backend/requirements.txt`,
 3. ensures the DB schema and optionally seeds demo data,
 4. installs frontend deps with `npm ci`,
@@ -474,19 +475,19 @@ python run.py --seed --fresh-db   # reset + reseed demo data
 python run.py --no-frontend       # API only
 ```
 
-### Deploy to a cloud VM (native build, no Docker)
+### Deploy to a cloud VM (Docker build)
 ```bash
-python run.py cloud       # dispatches to cloudrun.py
+python run.py cloud       # deploys to vitrine.ahbab.dev by default
 # or directly on the VM:
-python cloudrun.py deploy --domain vitrine.example.com
+python cloudrun.py deploy --domain vitrine.ahbab.dev
 ```
 `cloudrun.py`:
-1. installs system packages (Python/Node/Postgres/Redis/Caddy/nginx) if missing,
-2. builds the frontend (`vite build`) to static assets,
-3. sets up the venv + migrations + seed,
-4. writes **systemd** unit files for each service + agent workers (gunicorn/uvicorn workers),
-5. configures **Caddy** (default) or **nginx** as reverse proxy + static host + TLS (certbot for nginx),
-6. starts/enables all units and runs health checks.
+1. installs Docker and the Compose plugin if missing,
+2. syncs the checkout to `/opt/vitrine`,
+3. writes `.env.cloud`, `Caddyfile`, and `docker-compose.cloud.yml`,
+4. runs `docker compose build` so Python and Vite build inside Docker,
+5. starts the FastAPI gateway app container and the Caddy TLS container,
+6. persists SQLite and uploaded files in Docker volumes and runs health checks.
 
 Full flags and the deployment topology are documented in [backend.md](./backend.md#deployment).
 
@@ -531,7 +532,7 @@ This repository delivers the **complete, deployment-ready plan and orchestration
 >
 > A boutique marketplace where every product ships with a **live preview**, and an **OpenAI agent fleet** reads your repo, fills the spec, verifies quality, ranks listings, and helps you price & pitch.
 >
-> Built with FastAPI · Postgres+pgvector · React · OpenAI `gpt-4o-mini`.
+> Built with FastAPI · SQLite-now/Postgres-later · React · OpenAI `gpt-4o-mini`.
 >
 > 🔗 demo: _<link>_ · code: _<repo>_  #OpenAI #buildinpublic
 
