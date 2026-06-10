@@ -421,7 +421,7 @@ def setup_backend(seed: bool) -> None:
         sudo(["-u", "postgres", "psql", "-d", "vitrine", "-c",
               "CREATE EXTENSION IF NOT EXISTS vector;"], check=False)
     sudo(["-u", APP_USER, "bash", "-lc",
-          f"cd {APP_DIR} && {APP_DIR}/.venv/bin/alembic upgrade head"], check=False)
+          f"cd {APP_DIR}/backend && {APP_DIR}/.venv/bin/alembic upgrade head"], check=False)
     if seed:
         sudo(["-u", APP_USER, "bash", "-lc",
               f"cd {APP_DIR} && {APP_DIR}/.venv/bin/python -m backend.seed"], check=False)
