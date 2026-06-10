@@ -257,8 +257,10 @@ def caddy_conf(domain: str, gateway_port: int) -> str:
                 }}
             }}
 
-            try_files {{path}} /index.html
-            file_server
+            handle {{
+                try_files {{path}} /index.html
+                file_server
+            }}
         }}
     """)
 
