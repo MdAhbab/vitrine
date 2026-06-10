@@ -4,7 +4,7 @@ import { Sparkles, X, ArrowRight, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { type Product } from '../lib/mockData';
 import { conciergeStream, USE_MOCKS } from '../lib/api';
-import { useCatalogProducts } from '../lib/store';
+import { useStore, useCatalogProducts } from '../lib/store';
 
 type Msg =
   | { role: 'user'; text: string }
