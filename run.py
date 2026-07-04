@@ -202,7 +202,8 @@ def ensure_frontend() -> None:
         return
 
     info("Installing frontend requirements...")
-    npm_cmd = ["npm", "ci"] if (FRONTEND / "package-lock.json").exists() else ["npm", "install"]
+    npm_exec = shutil.which("npm") or ("npm.cmd" if os.name == "nt" else "npm")
+    npm_cmd = [npm_exec, "ci"] if (FRONTEND / "package-lock.json").exists() else [npm_exec, "install"]
     subprocess.check_call(npm_cmd, cwd=str(FRONTEND))
     ok("Frontend deps installed.")
 
@@ -341,11 +342,12 @@ def build_processes(
         env["VITE_API_BASE"] = "/api"
         env["VITE_PROXY_TARGET"] = api_url
         env["VITE_USE_MOCKS"] = "false"
+        npm_exec = shutil.which("npm") or ("npm.cmd" if os.name == "nt" else "npm")
         procs.append(
             Proc(
                 "frontend",
                 [
-                    "npm",
+                    npm_exec,
                     "run",
                     "dev",
                     "--",
