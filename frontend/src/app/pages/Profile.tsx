@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useStore, PLAN_DETAILS, type SellerPlan, type User } from '../lib/store';
+import { useStore, PLAN_DETAILS, type SellerPlan } from '../lib/store';
 import { api, mediaUrl } from '../lib/api';
 import {
   User as UserIcon,
   Settings as SettingsIcon,
-  Shield,
   Coins,
   Lock,
   Upload,
@@ -15,7 +14,6 @@ import {
   Eye,
   Check,
   ChevronRight,
-  ExternalLink,
   Crown,
   AlertCircle,
   Activity,

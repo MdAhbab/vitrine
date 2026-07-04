@@ -455,7 +455,7 @@ function EditListingModal({ listing, categories, frameworks, onClose, onSave }: 
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm overflow-y-auto flex items-center justify-center p-4">
-      <div className="bg-bg border border-border-c rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl text-text animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-bg border border-border-c rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl text-text fade-in" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center pb-2 border-b border-border-c">
           <h3 className="font-serif text-2xl">Edit Listing · {listing.name}</h3>
           <button onClick={onClose} className="hairline rounded-lg w-8 h-8 grid place-items-center hover:border-accent"><X size={14} /></button>
