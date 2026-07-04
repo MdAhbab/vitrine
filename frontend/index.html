@@ -1,23 +1,31 @@
-
-  <!DOCTYPE html>
-  <html lang="en">
-    <head>
-      
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Vitrine</title>
-      <meta name="description" content="Delivers a premium, creatively enhanced solution that meticulously implements user requirements while adding innovative features for optimal user experience." />
-      <meta name="robots" content="index, follow" />
-      <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-      <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
-      
-    </head>
-
-    <body>
-      
-      <div id="root"></div>
-      <script type="module" src="/src/main.tsx"></script>
-      
-    </body>
-  </html>
-  
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vitrine — Try the software. Then own it.</title>
+    <meta
+      name="description"
+      content="Vitrine is a boutique software marketplace where every product ships with a live, runnable preview and an AI agent fleet handles publishing, verification, and discovery."
+    />
+    <meta name="robots" content="index, follow" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
+    <script>
+      // Apply the saved theme before first paint so dark-mode users never see
+      // a white flash. Mirrors the logic in src/app/lib/theme.ts.
+      (function () {
+        try {
+          var saved = localStorage.getItem('vitrine-theme');
+          var dark = saved === 'dark' ||
+            (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) { /* storage unavailable — default to light */ }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

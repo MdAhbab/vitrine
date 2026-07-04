@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { TopNav } from './components/TopNav';
 import { Footer } from './components/Footer';
@@ -8,19 +8,31 @@ import { BargainModal, RequestFeaturesModal, CheckoutModal } from './components/
 import { Home } from './pages/Home';
 import { Browse } from './pages/Browse';
 import { ProductPage } from './pages/ProductPage';
-import { Sell } from './pages/Sell';
 import { AuthPage } from './pages/Auth';
 import { Pricing } from './pages/Pricing';
 import { Legal } from './pages/Legal';
 import { PublicInfo } from './pages/PublicInfo';
-import { Profile } from './pages/Profile';
-import { BuyerDashboard } from './pages/dashboards/BuyerDashboard';
-import { SellerDashboard } from './pages/dashboards/SellerDashboard';
-import { AdminDashboard } from './pages/dashboards/AdminDashboard';
 import { useTheme } from './lib/theme';
 import { useStore } from './lib/store';
 import type { Product } from './lib/mockData';
 import { api, USE_MOCKS } from './lib/api';
+
+// Auth-gated, chart-heavy surfaces load on demand so an anonymous visitor's
+// first paint doesn't pay for recharts or the seller/admin tooling.
+const Sell = lazy(() => import('./pages/Sell').then((m) => ({ default: m.Sell })));
+const Profile = lazy(() => import('./pages/Profile').then((m) => ({ default: m.Profile })));
+const BuyerDashboard = lazy(() => import('./pages/dashboards/BuyerDashboard').then((m) => ({ default: m.BuyerDashboard })));
+const SellerDashboard = lazy(() => import('./pages/dashboards/SellerDashboard').then((m) => ({ default: m.SellerDashboard })));
+const AdminDashboard = lazy(() => import('./pages/dashboards/AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
+
+function RouteLoading() {
+  return (
+    <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 pt-12 pb-24" aria-busy="true">
+      <div className="shimmer rounded-2xl h-10 w-56" />
+      <div className="shimmer rounded-2xl h-64 mt-6" />
+    </div>
+  );
+}
 
 
 type Route =
@@ -164,6 +176,7 @@ export default function App() {
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             className="flex-1"
           >
+           <Suspense fallback={<RouteLoading />}>
             {(route.name === 'home' || route.name === 'concierge') && (
               <Home
                 onOpenProduct={openProduct}
@@ -195,6 +208,7 @@ export default function App() {
             {route.name === 'admin-login' && <AuthPage mode="admin" onDone={() => go('/dashboard')} onSwitch={(m) => go(`/${m}`)} />}
             {route.name === 'info' && <PublicInfo kind={route.kind} onBrowse={() => navigate('browse')} />}
             {route.name === 'legal' && <Legal kind={route.kind} />}
+           </Suspense>
           </motion.div>
         </AnimatePresence>
 
