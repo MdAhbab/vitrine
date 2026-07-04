@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Play, Heart, Share2, Check, Star, Bot, Sparkles, Lightbulb, Wrench, Workflow, MessagesSquare, Briefcase, Layers, Flag } from 'lucide-react';
+import { Play, Share2, Check, Star, Bot, Sparkles, Lightbulb, Wrench, Workflow, MessagesSquare, Briefcase, Layers, Flag } from 'lucide-react';
+import { toast } from 'sonner';
 import { Typewriter } from '../components/Typewriter';
 import { type Product } from '../lib/mockData';
 import { useCatalogProducts } from '../lib/store';
@@ -144,10 +145,18 @@ export function ProductPage({
               <button onClick={() => onCheckout(product, tier)} className="flex-1 h-11 rounded-xl bg-text text-bg font-medium hover:opacity-90 transition-opacity">
                 Buy · ${product.tiers?.[tier].price.toLocaleString()}
               </button>
-              <button className="w-11 h-11 rounded-xl hairline grid place-items-center hover:border-accent transition-colors" aria-label="Save">
-                <Heart size={15} />
-              </button>
-              <button className="w-11 h-11 rounded-xl hairline grid place-items-center hover:border-accent transition-colors" aria-label="Share">
+              <button
+                onClick={async () => {
+                  const url = `${window.location.origin}${window.location.pathname}#/p/${product.slug}`;
+                  try {
+                    await navigator.clipboard.writeText(url);
+                    toast.success('Link copied');
+                  } catch {
+                    toast.error('Could not copy the link');
+                  }
+                }}
+                className="w-11 h-11 rounded-xl hairline grid place-items-center hover:border-accent transition-colors" aria-label="Share"
+              >
                 <Share2 size={15} />
               </button>
               <button onClick={async () => {
@@ -156,9 +165,9 @@ export function ProductPage({
                   try {
                     const { api } = await import('../lib/api');
                     await api.submitReport({ target_type: 'listing', target_id: product.id, reason });
-                    alert("Report submitted.");
+                    toast.success('Report submitted — a curator will review it.');
                   } catch (e) {
-                    alert("Failed to submit report.");
+                    toast.error('Failed to submit report');
                   }
                 }
               }} className="w-11 h-11 rounded-xl hairline grid place-items-center hover:border-danger text-text-muted hover:text-danger transition-colors" aria-label="Report">

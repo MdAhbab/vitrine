@@ -3,9 +3,16 @@ import { motion } from 'motion/react';
 import { Key, Sparkles, Shield, ToggleLeft, ToggleRight, Plus, Trash2, Eye, EyeOff, Sliders, Mail, Save, Bot, Receipt, ScrollText, Settings2 } from 'lucide-react';
 import { useStore, type AdminApiKey } from '../lib/store';
 import { toast } from 'sonner';
+import { useShallow } from 'zustand/react/shallow';
 
 export function CuratorConsole() {
-  const { adminConfig, updateAdminConfig, addApiKey, toggleApiKey, removeApiKey, listings, categories, frameworks, forms } = useStore();
+  const { adminConfig, updateAdminConfig, addApiKey, toggleApiKey, removeApiKey, listings, categories, frameworks, forms } = useStore(
+    useShallow((s) => ({
+      adminConfig: s.adminConfig, updateAdminConfig: s.updateAdminConfig,
+      addApiKey: s.addApiKey, toggleApiKey: s.toggleApiKey, removeApiKey: s.removeApiKey,
+      listings: s.listings, categories: s.categories, frameworks: s.frameworks, forms: s.forms,
+    })),
+  );
   const [section, setSection] = useState<'instructions' | 'keys' | 'flags' | 'fees' | 'escrow' | 'branding' | 'categories' | 'frameworks' | 'forms' | 'notes'>('instructions');
   const [saved, setSaved] = useState(false);
 
@@ -438,13 +445,13 @@ function KeyRow({ k, onToggle, onRemove }: { k: AdminApiKey; onToggle: () => voi
         </div>
         <div className="font-mono text-xs text-text-muted truncate mt-1">{revealed ? k.key : maskKey(k.key)}</div>
       </div>
-      <button onClick={() => setRevealed((s) => !s)} className="hairline rounded-lg w-9 h-9 grid place-items-center md:hover:border-accent active:border-accent shrink-0" aria-label="Reveal">
+      <button onClick={() => setRevealed((s) => !s)} className="hairline rounded-lg w-11 h-11 grid place-items-center md:hover:border-accent active:border-accent shrink-0" aria-label="Reveal">
         {revealed ? <EyeOff size={13} /> : <Eye size={13} />}
       </button>
-      <button onClick={onToggle} className="hairline rounded-lg w-9 h-9 grid place-items-center md:hover:border-accent active:border-accent shrink-0" aria-label="Toggle">
+      <button onClick={onToggle} className="hairline rounded-lg w-11 h-11 grid place-items-center md:hover:border-accent active:border-accent shrink-0" aria-label="Toggle">
         {k.enabled ? <ToggleRight size={15} className="text-accent" /> : <ToggleLeft size={15} className="text-text-muted" />}
       </button>
-      <button onClick={onRemove} className="hairline rounded-lg w-9 h-9 grid place-items-center md:hover:border-danger md:hover:text-danger active:border-danger active:text-danger shrink-0" aria-label="Remove">
+      <button onClick={onRemove} className="hairline rounded-lg w-11 h-11 grid place-items-center md:hover:border-danger md:hover:text-danger active:border-danger active:text-danger shrink-0" aria-label="Remove">
         <Trash2 size={13} />
       </button>
     </article>

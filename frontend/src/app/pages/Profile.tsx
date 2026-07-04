@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useStore, PLAN_DETAILS, type SellerPlan } from '../lib/store';
+import { setTheme } from '../lib/theme';
 import { api, mediaUrl } from '../lib/api';
 import {
   User as UserIcon,
@@ -21,7 +23,9 @@ import {
 } from 'lucide-react';
 
 export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBack?: () => void }) {
-  const { user: currentUser, updateUser, setUserPlan } = useStore();
+  const { user: currentUser, updateUser, setUserPlan } = useStore(
+    useShallow((s) => ({ user: s.user, updateUser: s.updateUser, setUserPlan: s.setUserPlan })),
+  );
   const [profileUser, setProfileUser] = useState<any | null>(null);
   const [listings, setListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -162,12 +166,10 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
         themeDefault: updatedUser.themeDefault
       }));
 
-      // Apply theme preference immediately
-      if (updatedUser.themeDefault === 'light') {
-        document.documentElement.classList.remove('dark');
-      } else {
-        document.documentElement.classList.add('dark');
-      }
+      // Apply through the shared theme store so the header toggle and the
+      // persisted vitrine-theme key stay in sync (a bare classList mutation
+      // desynced them).
+      setTheme(updatedUser.themeDefault === 'light' ? 'light' : 'dark');
 
       setProfileSuccess(true);
       setTimeout(() => setProfileSuccess(false), 3000);
@@ -329,7 +331,7 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
                 <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-6 gap-y-2 mt-4 pt-4 border-t border-border-c/40 text-xs font-mono">
                   <div>
                     <span className="text-text-muted">Trust Score: </span>
-                    <span className="text-text font-medium text-accent">{(profileUser.trustScore * 100).toFixed(0)}%</span>
+                    <span className="text-text font-medium text-accent">{((profileUser.trustScore ?? 0) * 100).toFixed(0)}%</span>
                   </div>
                   <div>
                     <span className="text-text-muted">Active Listings: </span>
@@ -669,7 +671,7 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
                         type="button"
                         onClick={() => {
                           setThemeDefault('dark');
-                          document.documentElement.classList.add('dark');
+                          setTheme('dark');
                           api.updateProfile({ theme_default: 'dark' }).then(updateUser);
                         }}
                         className={`h-20 rounded-2xl border flex flex-col items-center justify-center gap-1.5 transition-colors ${
@@ -684,7 +686,7 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
                         type="button"
                         onClick={() => {
                           setThemeDefault('light');
-                          document.documentElement.classList.remove('dark');
+                          setTheme('light');
                           api.updateProfile({ theme_default: 'light' }).then(updateUser);
                         }}
                         className={`h-20 rounded-2xl border flex flex-col items-center justify-center gap-1.5 transition-colors ${

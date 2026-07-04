@@ -16,7 +16,7 @@ function repoName(url: string): string {
 }
 
 export function Sell({ onDone }: { onDone: () => void }) {
-  const { user } = useStore();
+  const user = useStore((s) => s.user);
   const [step, setStep] = useState(0);
   const [url, setUrl] = useState('');
   const [analyzing, setAnalyzing] = useState(false);

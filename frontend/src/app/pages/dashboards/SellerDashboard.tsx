@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Crown, GraduationCap, Plus, TrendingUp, Wallet, Bot, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
@@ -16,9 +17,18 @@ const mockSeries = Array.from({ length: 14 }, (_, i) => ({
 
 
 export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => void; goToSell: () => void }) {
-  const { user, listings, transactions, threads, setUserPlan, toggleStudent, upsertListing, loadData } = useStore();
+  const { user, listings, transactions, threads, setUserPlan, toggleStudent, upsertListing, loadData } = useStore(
+    useShallow((s) => ({
+      user: s.user, listings: s.listings, transactions: s.transactions, threads: s.threads,
+      setUserPlan: s.setUserPlan, toggleStudent: s.toggleStudent,
+      upsertListing: s.upsertListing, loadData: s.loadData,
+    })),
+  );
   const [payoutBusy, setPayoutBusy] = useState(false);
   const [analytics, setAnalytics] = useState<any>(null);
+  const [tab, setTab] = useState<'overview' | 'listings' | 'inbox' | 'payouts' | 'plan'>('overview');
+  const [editor, setEditor] = useState<{ listing: Listing; mode: 'view' | 'edit' } | null>(null);
+  const [repostingId, setRepostingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (USE_MOCKS) return;
@@ -27,10 +37,9 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
       .catch(console.error);
   }, []);
 
+  // Guard AFTER all hooks (Rules of Hooks — the early return previously sat
+  // between hook calls and could crash on a mid-commit user flip).
   if (!user) return null;
-  const [tab, setTab] = useState<'overview' | 'listings' | 'inbox' | 'payouts' | 'plan'>('overview');
-  const [editor, setEditor] = useState<{ listing: Listing; mode: 'view' | 'edit' } | null>(null);
-  const [repostingId, setRepostingId] = useState<string | null>(null);
 
   const handleRepost = async (id: string) => {
     setRepostingId(id);

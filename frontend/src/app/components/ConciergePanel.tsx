@@ -18,7 +18,7 @@ const SUGGESTIONS = [
 ];
 
 export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean; onClose: () => void; onOpenProduct: (slug: string) => void }) {
-  const { user } = useStore();
+  const user = useStore((s) => s.user);
   const products = useCatalogProducts();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -263,7 +263,7 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
                 <button
                   type="submit"
                   disabled={!input.trim() || streaming}
-                  className="w-9 h-9 grid place-items-center rounded-xl bg-text text-bg disabled:opacity-30 transition-opacity"
+                  className="w-11 h-11 grid place-items-center rounded-xl bg-text text-bg disabled:opacity-30 transition-opacity"
                   aria-label="Send"
                 >
                   <Send size={14} />

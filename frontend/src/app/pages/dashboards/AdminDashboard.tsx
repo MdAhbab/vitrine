@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { Shield, MessageSquare, Receipt, Users, Sparkles, Check, X, Eye, Pencil } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useStore } from '../../lib/store';
@@ -15,8 +16,12 @@ const series = Array.from({ length: 14 }, (_, i) => ({
 }));
 
 export function AdminDashboard() {
-  const { user, listings, transactions, threads, categories, frameworks } = useStore();
-  if (!user) return null;
+  const { user, listings, transactions, threads, categories, frameworks } = useStore(
+    useShallow((s) => ({
+      user: s.user, listings: s.listings, transactions: s.transactions, threads: s.threads,
+      categories: s.categories, frameworks: s.frameworks,
+    })),
+  );
   const [tab, setTab] = useState<'overview' | 'queue' | 'transactions' | 'chats' | 'users' | 'agents' | 'console' | 'escrow' | 'reports'>('overview');
 
   const [queue, setQueue] = useState<any[]>([]);
@@ -132,6 +137,9 @@ export function AdminDashboard() {
     }
   };
 
+  // Guard AFTER all hooks (Rules of Hooks).
+  if (!user) return null;
+
   const grossVolume = transactions.reduce((s, t) => s + t.amount, 0);
   const houseTake = transactions.reduce((s, t) => s + t.commission, 0);
 
@@ -168,14 +176,14 @@ export function AdminDashboard() {
               <Stat k="House take" v={`$${houseTake.toLocaleString()}`} icon={<Sparkles size={14} />} />
               <Stat k="Open chats" v={String(threads.length)} icon={<MessageSquare size={14} />} />
               <Stat k="Verified makers" v={String(new Set(listings.map((l) => l.ownerId)).size)} icon={<Users size={14} />} />
-              <Stat k="Site views · 14d" v={adminAnalytics ? adminAnalytics.views_14d.toLocaleString() : "14,328"} icon={<Eye size={14} />} />
+              <Stat k="Site views · 14d" v={adminAnalytics ? adminAnalytics.views_14d.toLocaleString() : (USE_MOCKS ? '14,328' : '—')} icon={<Eye size={14} />} />
             </div>
             <section className="hairline rounded-2xl bg-surface p-6 mt-6">
               <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Trend · 14 days</div>
-              <h2 className="font-serif text-xl mt-1">Transactions vs. agent cost ($k)</h2>
+              <h2 className="font-serif text-xl mt-1">Views vs. demo launches</h2>
               <div className="h-64 mt-5 -mx-2">
                 <ResponsiveContainer>
-                  <AreaChart data={series} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
+                  <AreaChart data={adminAnalytics ? adminAnalytics.history : (USE_MOCKS ? series : [])} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
                     <defs>
                       <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} />
@@ -185,8 +193,8 @@ export function AdminDashboard() {
                     <XAxis dataKey="d" stroke="var(--text-muted)" fontSize={10} tickLine={false} axisLine={false} />
                     <YAxis stroke="var(--text-muted)" fontSize={10} tickLine={false} axisLine={false} />
                     <Tooltip contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border-c)', borderRadius: 12, fontSize: 12 }} />
-                    <Area type="monotone" dataKey="txns" stroke="var(--accent)" strokeWidth={2} fill="url(#ag)" />
-                    <Area type="monotone" dataKey="agent" stroke="var(--text)" strokeWidth={1.5} fill="none" />
+                    <Area type="monotone" dataKey={adminAnalytics ? 'views' : 'txns'} stroke="var(--accent)" strokeWidth={2} fill="url(#ag)" />
+                    <Area type="monotone" dataKey={adminAnalytics ? 'launches' : 'agent'} stroke="var(--text)" strokeWidth={1.5} fill="none" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -218,10 +226,10 @@ export function AdminDashboard() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => setEditingListing(l)} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-accent" aria-label="Edit"><Pencil size={13} /></button>
-                    <button onClick={() => handleDecision(l.id, 'approve')} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-success hover:text-success" aria-label="Approve"><Check size={14} /></button>
-                    <button onClick={() => handleDecision(l.id, 'reject')} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-danger hover:text-danger" aria-label="Reject"><X size={14} /></button>
-                    <button onClick={() => handleDeleteListing(l.id)} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-danger hover:text-danger" aria-label="Delete"><X size={14} /></button>
+                    <button onClick={() => setEditingListing(l)} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-accent" aria-label="Edit"><Pencil size={13} /></button>
+                    <button onClick={() => handleDecision(l.id, 'approve')} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-success hover:text-success" aria-label="Approve"><Check size={14} /></button>
+                    <button onClick={() => handleDecision(l.id, 'reject')} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-danger hover:text-danger" aria-label="Reject"><X size={14} /></button>
+                    <button onClick={() => handleDeleteListing(l.id)} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-danger hover:text-danger" aria-label="Delete"><X size={14} /></button>
                   </div>
                 </article>
               );
@@ -264,7 +272,7 @@ export function AdminDashboard() {
                 <tr><th className="text-left p-4">Name</th><th className="text-left p-4">Email</th><th className="text-left p-4">Role</th><th className="p-4 text-left">Status</th><th className="p-4 text-right pr-6">Actions</th></tr>
               </thead>
               <tbody>
-                {usersList.length === 0 && <tr><td colSpan={5} className="p-4 text-center text-text-muted">Loading users...</td></tr>}
+                {usersList.length === 0 && <tr><td colSpan={5} className="p-4 text-center text-text-muted">{USE_MOCKS ? 'User management is unavailable in the offline demo.' : 'No users found.'}</td></tr>}
                 {usersList.map((u) => (
                   <tr key={u.id} className="border-t">
                     <td className="p-4 font-serif">{u.name || 'Unnamed'}</td>

@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { Check, Crown, GraduationCap } from 'lucide-react';
 import { PLAN_DETAILS, type SellerPlan, useStore } from '../lib/store';
+import { useShallow } from 'zustand/react/shallow';
 
 export function Pricing({ onAuth }: { onAuth: () => void }) {
-  const { user, setUserPlan, toggleStudent } = useStore();
+  const { user, setUserPlan, toggleStudent } = useStore(
+    useShallow((s) => ({ user: s.user, setUserPlan: s.setUserPlan, toggleStudent: s.toggleStudent })),
+  );
   const [annual, setAnnual] = useState(false);
   const isStudent = !!user?.isStudent;
   const discount = isStudent ? 0.75 : 1;

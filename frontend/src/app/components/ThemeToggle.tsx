@@ -8,7 +8,7 @@ export function ThemeToggle() {
     <button
       onClick={toggle}
       aria-label="Toggle theme"
-      className="relative hairline rounded-full w-9 h-9 grid place-items-center bg-surface hover:border-accent transition-colors"
+      className="relative hairline rounded-full w-11 h-11 grid place-items-center bg-surface hover:border-accent transition-colors"
     >
       <AnimatePresence mode="wait" initial={false}>
         <motion.span

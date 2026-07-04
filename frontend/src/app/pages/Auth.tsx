@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowRight, Github, Mail, Lock, Shield, User as UserIcon, GraduationCap, ShoppingBag, Wrench } from 'lucide-react';
+import { ArrowRight, Mail, Lock, Shield, User as UserIcon, GraduationCap, ShoppingBag, Wrench } from 'lucide-react';
 import { Logo } from '../components/Logo';
 import { useStore, MOCK_USER_IDS, type Role } from '../lib/store';
 
@@ -97,13 +97,12 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
           <span className="w-9 h-9 rounded-full grid place-items-center bg-text text-bg"><Shield size={14} /></span>
           <div>
             <div className="font-serif text-xl">Curator sign-in</div>
-            <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">2FA required</div>
+            <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">Restricted area</div>
           </div>
         </div>
         <form onSubmit={submit} className="space-y-3">
           <Field icon={Mail} label="Curator email" value={email} onChange={setEmail} placeholder="curator@vitrine.studio" />
           <Field icon={Lock} label="Password" type="password" value={pw} onChange={setPw} placeholder="••••••••••" />
-          <Field icon={Shield} label="Auth code" value="" onChange={() => {}} placeholder="6-digit code" />
           <button className="w-full bg-text text-bg rounded-xl h-11 font-medium inline-flex items-center justify-center gap-2 mt-4">
             Enter the back of house <ArrowRight size={14} />
           </button>
@@ -166,20 +165,6 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
           {mode === 'login' ? 'Sign in' : 'Create account'} <ArrowRight size={14} />
         </button>
       </form>
-
-      <div className="my-5 flex items-center gap-3">
-        <div className="flex-1 h-px bg-border-c" />
-        <span className="font-mono text-[10px] uppercase tracking-wider text-text-muted">or</span>
-        <div className="flex-1 h-px bg-border-c" />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <button type="button" onClick={submit as any} className="hairline rounded-xl h-11 inline-flex items-center justify-center gap-2 text-sm hover:border-accent transition-colors">
-          <Github size={14} /> GitHub
-        </button>
-        <button type="button" onClick={submit as any} className="hairline rounded-xl h-11 inline-flex items-center justify-center gap-2 text-sm hover:border-accent transition-colors">
-          <Mail size={14} /> Email link
-        </button>
-      </div>
 
       <p className="text-xs mt-6 text-text-muted">
         {mode === 'login' ? (

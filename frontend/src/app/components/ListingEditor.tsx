@@ -11,7 +11,8 @@ type Mode = 'view' | 'edit';
 export function ListingEditor({
   listing, mode: initialMode, onClose,
 }: { listing: Listing; mode: Mode; onClose: () => void }) {
-  const { upsertListing, deleteListing } = useStore();
+  const upsertListing = useStore((s) => s.upsertListing);
+  const deleteListing = useStore((s) => s.deleteListing);
   const [mode, setMode] = useState<Mode>(initialMode);
   const [draft, setDraft] = useState<Listing>(listing);
   const [drafting, setDrafting] = useState(false);
@@ -74,7 +75,7 @@ export function ListingEditor({
               {mode === 'view' ? (
                 <>
                   <button onClick={() => setMode('edit')} className="hairline rounded-lg px-3 h-9 text-sm hover:border-accent">Edit</button>
-                  <button onClick={remove} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-danger hover:text-danger" aria-label="Delete"><Trash2 size={14} /></button>
+                  <button onClick={remove} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-danger hover:text-danger" aria-label="Delete"><Trash2 size={14} /></button>
                 </>
               ) : (
                 <>
@@ -85,7 +86,7 @@ export function ListingEditor({
                   <button onClick={save} className="bg-text text-bg rounded-lg px-3 h-9 text-sm inline-flex items-center gap-2"><Save size={13} /> Save</button>
                 </>
               )}
-              <button onClick={onClose} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-accent" aria-label="Close"><X size={14} /></button>
+              <button onClick={onClose} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-accent" aria-label="Close"><X size={14} /></button>
             </div>
           </header>
 
@@ -257,7 +258,7 @@ function TagList({ items, mode, onChange }: { items: string[]; mode: Mode; onCha
             placeholder="Add item and press Enter"
             className="flex-1 hairline rounded-lg bg-surface-2 px-3 h-9 text-sm focus:border-accent outline-none"
           />
-          <button onClick={add} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-accent" aria-label="Add"><Plus size={13} /></button>
+          <button onClick={add} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-accent" aria-label="Add"><Plus size={13} /></button>
         </div>
       )}
     </div>

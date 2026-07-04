@@ -1,16 +1,24 @@
-import { Bot, Download, Heart, KeyRound, MessageSquare, ShoppingBag, ChevronRight } from 'lucide-react';
+import { Bot, KeyRound, MessageSquare, ShoppingBag, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useStore, activeRepsForBuyer, type Listing, type Transaction } from '../../lib/store';
 import { Inbox } from '../../components/Inbox';
 import { OrderDetail } from '../../components/OrderDetail';
 import { PreviewFrame } from '../../components/PreviewFrame';
 
 export function BuyerDashboard() {
-  const { user, transactions, threads, deactivateRep, listings } = useStore();
-  if (!user) return null;
+  const { user, transactions, threads, deactivateRep, listings } = useStore(
+    useShallow((s) => ({
+      user: s.user, transactions: s.transactions, threads: s.threads,
+      deactivateRep: s.deactivateRep, listings: s.listings,
+    })),
+  );
   const [tab, setTab] = useState<'overview' | 'library' | 'orders' | 'reps' | 'messages'>('overview');
   const [openOrder, setOpenOrder] = useState<Transaction | null>(null);
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
+  // Guard AFTER all hooks — an early return above them violates the Rules of
+  // Hooks and crashes if `user` flips mid-commit.
+  if (!user) return null;
 
   const mine = transactions.filter((t) => t.buyerId === user.id);
   const reps = activeRepsForBuyer(user.id, threads);
@@ -61,9 +69,7 @@ export function BuyerDashboard() {
                     <div className="font-serif text-lg">{p.name}</div>
                     <div className="text-xs text-text-muted mt-1">{p.license} · {order?.tier ?? 'Source'} · delivered</div>
                     <div className="mt-4 flex gap-2">
-                      <button onClick={(e) => { e.stopPropagation(); }} className="flex-1 hairline rounded-lg h-9 text-sm inline-flex items-center justify-center gap-1.5 hover:border-accent transition-colors"><Download size={13} /> Download</button>
-                      <button onClick={(e) => { e.stopPropagation(); setPreview({ url: p.demoUrl, name: p.name }); }} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-accent transition-colors" aria-label="Open demo"><ChevronRight size={13} /></button>
-                      <button onClick={(e) => e.stopPropagation()} className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-accent transition-colors" aria-label="Save"><Heart size={13} /></button>
+                      <button onClick={(e) => { e.stopPropagation(); setPreview({ url: p.demoUrl, name: p.name }); }} className="flex-1 hairline rounded-lg h-11 text-sm inline-flex items-center justify-center gap-1.5 hover:border-accent transition-colors"><ChevronRight size={13} /> Open demo</button>
                     </div>
                   </div>
                 </article>

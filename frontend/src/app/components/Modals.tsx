@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import type { Product } from '../lib/mockData';
 import { api, USE_MOCKS } from '../lib/api';
 import { useStore, activeRepsForBuyer, sellerIdFor } from '../lib/store';
+import { useShallow } from 'zustand/react/shallow';
 
 function Shell({ open, onClose, children, max = 'max-w-lg' }: { open: boolean; onClose: () => void; children: React.ReactNode; max?: string }) {
   return (
@@ -46,7 +47,12 @@ function Header({ title, eyebrow, onClose, icon }: { title: string; eyebrow: str
 }
 
 export function BargainModal({ open, onClose, product, onOpenInbox }: { open: boolean; onClose: () => void; product: Product | null; onOpenInbox: () => void }) {
-  const { user, threads, startThread, sendMessage, deactivateRep } = useStore();
+  const { user, threads, startThread, sendMessage, deactivateRep } = useStore(
+    useShallow((s) => ({
+      user: s.user, threads: s.threads, startThread: s.startThread,
+      sendMessage: s.sendMessage, deactivateRep: s.deactivateRep,
+    })),
+  );
   const [step, setStep] = useState<'brief' | 'terms'>('brief');
   const [budget, setBudget] = useState(0);
   const [tone, setTone] = useState<'firm' | 'warm' | 'curious'>('warm');
@@ -322,7 +328,7 @@ function Label({ v, children }: { v: string; children: React.ReactNode }) {
 }
 
 export function RequestFeaturesModal({ open, onClose, product }: { open: boolean; onClose: () => void; product: Product | null }) {
-  const { user } = useStore();
+  const user = useStore((s) => s.user);
   const [features, setFeatures] = useState<string[]>([]);
   const [featurePrices, setFeaturePrices] = useState<Record<string, number>>({
     'Custom branding & domain': 380,
@@ -468,7 +474,8 @@ export function RequestFeaturesModal({ open, onClose, product }: { open: boolean
 }
 
 export function CheckoutModal({ open, onClose, product, tierIndex = 0 }: { open: boolean; onClose: () => void; product: Product | null; tierIndex?: number }) {
-  const { user, recordTransaction } = useStore();
+  const user = useStore((s) => s.user);
+  const recordTransaction = useStore((s) => s.recordTransaction);
   const [step, setStep] = useState<'pay' | 'done'>('pay');
   const [card, setCard] = useState({ number: '4242 4242 4242 4242', exp: '12 / 28', cvc: '123', name: user?.name ?? 'June Park', zip: '10001' });
   const [processing, setProcessing] = useState(false);

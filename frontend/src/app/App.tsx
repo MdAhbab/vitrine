@@ -73,7 +73,8 @@ function parseHash(): Route {
 
 export default function App() {
   useTheme();
-  const { user, loadSession } = useStore();
+  const user = useStore((s) => s.user);
+  const loadSession = useStore((s) => s.loadSession);
   const [route, setRoute] = useState<Route>(() => parseHash());
   const [sessionChecked, setSessionChecked] = useState(false);
 

@@ -2,11 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { Bot, Send, Eye, Sparkles, Paperclip, FileText } from 'lucide-react';
 import { useStore, type MessageAttachment, type Role } from '../lib/store';
 import { api, mediaUrl, USE_MOCKS } from '../lib/api';
+import { useShallow } from 'zustand/react/shallow';
 
 const CHAT_MAX_BYTES = 4 * 1024 * 1024;
 
 export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name: string } }) {
-  const { threads, messages, sendMessage, agentReply, deactivateRep } = useStore();
+  const { threads, messages, sendMessage, agentReply, deactivateRep } = useStore(
+    useShallow((s) => ({
+      threads: s.threads, messages: s.messages, sendMessage: s.sendMessage,
+      agentReply: s.agentReply, deactivateRep: s.deactivateRep,
+    })),
+  );
   const visible = threads.filter((t) => {
     if (role === 'admin') return true;
     if (role === 'buyer') return t.buyerId === viewer.id;
@@ -225,7 +231,7 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
                     type="button"
                     onClick={() => fileRef.current?.click()}
                     disabled={uploading}
-                    className="w-9 h-9 shrink-0 grid place-items-center rounded-lg hover:bg-surface-2 disabled:opacity-40"
+                    className="w-11 h-11 shrink-0 grid place-items-center rounded-lg hover:bg-surface-2 disabled:opacity-40"
                     aria-label="Attach file"
                   >
                     <Paperclip size={14} />
@@ -238,7 +244,7 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
                     placeholder={active.isAgent && role === 'buyer' ? 'Your AI rep is handling this — chime in if you want to adjust.' : 'Write a message…'}
                     className="flex-1 bg-transparent outline-none resize-none text-sm py-2 px-2 max-h-28"
                   />
-                  <button className="w-9 h-9 grid place-items-center rounded-lg bg-text text-bg disabled:opacity-30" disabled={!input.trim() && !pendingAtt} aria-label="Send">
+                  <button className="w-11 h-11 grid place-items-center rounded-lg bg-text text-bg disabled:opacity-30" disabled={!input.trim() && !pendingAtt} aria-label="Send">
                     <Send size={13} />
                   </button>
                 </div>

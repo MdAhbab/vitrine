@@ -19,7 +19,8 @@ export function Home({
   onBrowse: () => void;
   onBargain: (p: Product) => void;
 }) {
-  const { adminConfig, categories } = useStore();
+  const adminConfig = useStore((s) => s.adminConfig);
+  const categories = useStore((s) => s.categories);
   const products = useCatalogProducts();
   const top = [...products].sort((a, b) => b.vitrineScore - a.vitrineScore);
   

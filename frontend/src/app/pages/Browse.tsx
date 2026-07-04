@@ -10,7 +10,7 @@ const PAGE_SIZE = 18;
 
 export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct: (slug: string) => void; onPreview: (p: Product) => void; onBargain: (p: Product) => void }) {
   const products = useCatalogProducts();
-  const { categories } = useStore();
+  const categories = useStore((s) => s.categories);
   const [cats, setCats] = useState<string[]>([]);
   const [maxPrice, setMaxPrice] = useState(50000);
   const [hasDemo, setHasDemo] = useState(false);
@@ -188,7 +188,7 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
                     key={n}
                     onClick={() => goPage(n)}
                     aria-label={`Page ${n}`}
-                    className={`w-9 h-9 rounded-full font-mono text-[10px] transition-colors ${
+                    className={`w-11 h-11 rounded-full font-mono text-[11px] transition-colors ${
                       n === page ? 'bg-text text-bg' : 'hairline text-text-muted hover:text-text hover:border-accent'
                     }`}
                   >

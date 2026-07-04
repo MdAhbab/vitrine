@@ -9,7 +9,8 @@ import { useStore } from '../lib/store';
 type Route = 'home' | 'browse' | 'product' | 'concierge' | 'sell' | 'dashboard' | 'pricing' | 'login' | 'whats-new' | 'services' | 'about' | 'profile';
 
 export function TopNav({ route, navigate, onConcierge }: { route: Route; navigate: (r: Route) => void; onConcierge: () => void }) {
-  const { user, signOut } = useStore();
+  const user = useStore((s) => s.user);
+  const signOut = useStore((s) => s.signOut);
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -82,7 +83,7 @@ export function TopNav({ route, navigate, onConcierge }: { route: Route; navigat
           <button
             onClick={onConcierge}
             aria-label="Search"
-            className="sm:hidden hairline rounded-full w-9 h-9 grid place-items-center"
+            className="sm:hidden hairline rounded-full w-11 h-11 grid place-items-center"
           >
             <Search size={14} />
           </button>
@@ -121,7 +122,7 @@ export function TopNav({ route, navigate, onConcierge }: { route: Route; navigat
           <button
             onClick={() => setMobileOpen((s) => !s)}
             aria-label="Menu"
-            className="md:hidden hairline rounded-full w-9 h-9 grid place-items-center"
+            className="md:hidden hairline rounded-full w-11 h-11 grid place-items-center"
           >
             {mobileOpen ? <X size={14} /> : <Menu size={14} />}
           </button>
