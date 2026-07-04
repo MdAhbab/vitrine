@@ -7,6 +7,8 @@ shapes for the next AI to implement. See backend.md step-by-step Phase 2.
 """
 from __future__ import annotations
 
+import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status, Response
 from sqlalchemy import select, delete, func
@@ -48,7 +50,47 @@ async def _load(db: AsyncSession, listing: Listing) -> ProductOut:
     return to_product(listing, seller, list(tiers), list(fields))
 
 
+async def _load_many(db: AsyncSession, listings: list[Listing]) -> list[ProductOut]:
+    """Batch-load sellers, tiers, and fields for a page of listings.
+
+    Replaces the previous per-row N+1 (3 queries × N) on the gallery's hottest
+    endpoint with 3 grouped `IN (...)` queries regardless of page size.
+    """
+    if not listings:
+        return []
+    ids = [l.id for l in listings]
+    owner_ids = list({l.owner_id for l in listings})
+
+    sellers = {u.id: u for u in
+               (await db.execute(select(User).where(User.id.in_(owner_ids)))).scalars()}
+
+    tiers_by: dict[str, list[ListingTier]] = defaultdict(list)
+    for t in (await db.execute(select(ListingTier).where(ListingTier.listing_id.in_(ids)))).scalars():
+        tiers_by[t.listing_id].append(t)
+
+    fields_by: dict[str, list[ListingField]] = defaultdict(list)
+    for f in (await db.execute(select(ListingField).where(ListingField.listing_id.in_(ids)))).scalars():
+        fields_by[f.listing_id].append(f)
+
+    return [to_product(l, sellers.get(l.owner_id), tiers_by.get(l.id, []), fields_by.get(l.id, []))
+            for l in listings]
+
+
+_last_cleanup_ts = 0.0
+_CLEANUP_INTERVAL_S = 600  # at most once per 10 min, not once per request
+
+
 async def cleanup_expired_listings(db: AsyncSession) -> None:
+    """Throttled soft-GC of long-expired listings.
+
+    Was a DELETE+COMMIT on every GET /listings (a write on the busiest read
+    path → SQLite write-lock contention). Now runs at most once per interval.
+    """
+    global _last_cleanup_ts
+    now_ts = time.monotonic()
+    if now_ts - _last_cleanup_ts < _CLEANUP_INTERVAL_S:
+        return
+    _last_cleanup_ts = now_ts
     try:
         now = datetime.now(timezone.utc)
         three_months_ago = now - timedelta(days=90)
@@ -90,8 +132,8 @@ async def list_listings(
         stmt = stmt.where(Listing.name.ilike(f"%{q}%"))
     order = Listing.vitrine_score.desc() if sort == "vitrine_score" else Listing.created_at.desc()
     stmt = stmt.order_by(order).limit(limit).offset(offset)
-    rows = (await db.execute(stmt)).scalars().all()
-    out = [await _load(db, r) for r in rows]
+    rows = list((await db.execute(stmt)).scalars().all())
+    out = await _load_many(db, rows)
     if tag:  # simple post-filter on JSON tags (pgvector/GIN later)
         out = [p for p in out if tag in p.tags]
     return out

@@ -10,9 +10,15 @@ Pricing (gpt-4o-mini, approx): $0.15 / 1M input, $0.60 / 1M output.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from backend.shared.settings import settings
+
+# How long to reuse the admin-configured provider clients before re-reading the
+# admin_configs row. Keeps LLM calls off the DB on the hot path while still
+# picking up admin key rotations within a few seconds.
+_CONFIG_TTL_S = 20.0
 
 _PRICE = {  # USD per 1M tokens (input, output)
     "gpt-4o-mini": (0.15, 0.60),
@@ -44,12 +50,37 @@ class LLMResult:
 
 class AIClient:
     def __init__(self) -> None:
-        self._clients = []
+        self._clients: list = []             # admin-configured provider clients (cached)
         self._cached_hash: int | None = None
+        self._configured_at: float = 0.0     # monotonic ts of last DB read
+        self._ever_configured: bool = False
+        self._default_client = None          # env-key OpenAI client (built once)
 
-    async def _get_configured_clients(self) -> list[tuple[any, str]]:
-        # Returns list of (AsyncOpenAI_client, provider_name)
-        # We hash the config rows to decide if we need to rebuild the clients
+    def _default(self):
+        """The settings.OPENAI_API_KEY client, constructed once and reused."""
+        if settings.OPENAI_API_KEY and self._default_client is None:
+            from openai import AsyncOpenAI
+            self._default_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        return self._default_client
+
+    async def _resolved_clients(self) -> list[tuple]:
+        """(client, provider) list = env-default first, then admin-configured.
+
+        Returns a NEW list each call so callers can prepend without mutating the
+        cached admin-client list (the previous code leaked a fresh client into
+        the cache on every call). The DB is only read once per _CONFIG_TTL_S.
+        """
+        clients: list[tuple] = []
+        default = self._default()
+        if default is not None:
+            clients.append((default, "openai"))
+        clients.extend(await self._get_configured_clients())
+        return clients
+
+    async def _get_configured_clients(self) -> list[tuple]:
+        # Serve the cached provider clients without touching the DB inside the TTL.
+        if self._ever_configured and (time.monotonic() - self._configured_at) < _CONFIG_TTL_S:
+            return self._clients
         try:
             from backend.shared.crypto import decrypt_value
             from backend.shared.db import SessionLocal
@@ -57,53 +88,45 @@ class AIClient:
             import json
             async with SessionLocal() as db:
                 row = await db.get(AdminConfig, "api_keys")
-                if not row or not isinstance(row.value, list):
-                    return []
-                
-                # compute a simple hash of enabled keys
-                active = [k for k in row.value if isinstance(k, dict) and k.get("enabled") and k.get("key")]
+                active = ([k for k in row.value if isinstance(k, dict) and k.get("enabled") and k.get("key")]
+                          if row and isinstance(row.value, list) else [])
                 config_hash = hash(json.dumps([{**k, "key": "MASKED"} for k in active], sort_keys=True))
-                
-                if self._cached_hash == config_hash and self._clients:
+
+                if self._cached_hash == config_hash and self._ever_configured:
+                    self._configured_at = time.monotonic()
                     return self._clients
 
                 from openai import AsyncOpenAI
+                _bases = {
+                    "grok": "https://api.x.ai/v1",
+                    "nvidia": "https://integrate.api.nvidia.com/v1",
+                    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
+                }
                 clients = []
                 for k in active:
                     provider = k.get("provider")
                     raw_key = decrypt_value(k["key"])
-                    if not raw_key:
+                    if not raw_key or provider not in ("openai", "grok", "nvidia", "gemini", "custom"):
                         continue
-                        
-                    if provider == "openai":
-                        clients.append((AsyncOpenAI(api_key=raw_key), "openai"))
-                    elif provider == "grok":
-                        clients.append((AsyncOpenAI(api_key=raw_key, base_url="https://api.x.ai/v1"), "grok"))
-                    elif provider == "nvidia":
-                        clients.append((AsyncOpenAI(api_key=raw_key, base_url="https://integrate.api.nvidia.com/v1"), "nvidia"))
-                    elif provider == "gemini":
-                        clients.append((AsyncOpenAI(api_key=raw_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/"), "gemini"))
-                    elif provider == "custom":
-                        clients.append((AsyncOpenAI(api_key=raw_key), "custom"))
-                        
+                    base_url = _bases.get(provider)
+                    clients.append((AsyncOpenAI(api_key=raw_key, base_url=base_url) if base_url
+                                    else AsyncOpenAI(api_key=raw_key), provider))
+
                 self._clients = clients
                 self._cached_hash = config_hash
-                return self._clients
         except Exception as e:
             print(f"[ai] Client resolve error: {e}")
-            return []
+            # keep last-known clients rather than dropping to none on a transient error
+        self._ever_configured = True
+        self._configured_at = time.monotonic()
+        return self._clients
 
     async def chat(self, messages: list[dict], *, tools: list | None = None,
                    model: str | None = None, stream: bool = False,
                    json_mode: bool = False) -> LLMResult:
-        
-        clients = await self._get_configured_clients()
-        
-        # If settings.OPENAI_API_KEY is present, prepend a default OpenAI client
-        if settings.OPENAI_API_KEY:
-            from openai import AsyncOpenAI
-            clients.insert(0, (AsyncOpenAI(api_key=settings.OPENAI_API_KEY), "openai"))
-            
+
+        clients = await self._resolved_clients()
+
         if not clients:
             return self._stub(messages, model or settings.OPENAI_MODEL)
 
@@ -150,12 +173,8 @@ class AIClient:
 
     async def embed(self, text: str, *, model: str | None = None) -> list[float]:
         model = model or settings.OPENAI_EMBED_MODEL
-        clients = await self._get_configured_clients()
-        
-        if settings.OPENAI_API_KEY:
-            from openai import AsyncOpenAI
-            clients.insert(0, (AsyncOpenAI(api_key=settings.OPENAI_API_KEY), "openai"))
-            
+        clients = await self._resolved_clients()
+
         # For embeddings, we prefer OpenAI since vector stores expect 1536 dim
         # but let's try the first available client that is OpenAI compatible for embeddings
         for client, provider in clients:

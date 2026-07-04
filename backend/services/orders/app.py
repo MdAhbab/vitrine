@@ -166,6 +166,23 @@ async def deliver(order_id: str, body: DeliverIn | None = None,
     return {"status": "delivered", "order_id": order_id, "license_key": delivery.license_key}
 
 
+async def _hydrate_orders(db: AsyncSession, rows: list[Order]) -> dict:
+    """Batch-load the listings, users, and deliveries referenced by a set of
+    orders in 3 grouped queries instead of ~4 per order (N+1)."""
+    if not rows:
+        return {"listings": {}, "users": {}, "deliveries": {}}
+    listing_ids = list({o.listing_id for o in rows})
+    user_ids = list({uid for o in rows for uid in (o.buyer_id, o.seller_id)})
+    order_ids = [o.id for o in rows]
+    listings = {l.id: l for l in
+                (await db.execute(select(Listing).where(Listing.id.in_(listing_ids)))).scalars()}
+    users = {u.id: u for u in
+             (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars()}
+    deliveries = {d.order_id: d for d in
+                  (await db.execute(select(Delivery).where(Delivery.order_id.in_(order_ids)))).scalars()}
+    return {"listings": listings, "users": users, "deliveries": deliveries}
+
+
 @router.get("/orders", response_model=list[OrderOut])
 async def list_orders(user: Principal = Depends(current_user),
                       db: AsyncSession = Depends(get_session)) -> list[OrderOut]:
@@ -173,16 +190,16 @@ async def list_orders(user: Principal = Depends(current_user),
     if user.role != "admin":
         stmt = stmt.where((Order.buyer_id == user.id) | (Order.seller_id == user.id))
     stmt = stmt.order_by(Order.created_at.desc())
-    rows = (await db.execute(stmt)).scalars().all()
-    
+    rows = list((await db.execute(stmt)).scalars().all())
+    hy = await _hydrate_orders(db, rows)
+
     out = []
     for o in rows:
-        listing = await db.get(Listing, o.listing_id)
-        buyer = await db.get(User, o.buyer_id)
-        seller = await db.get(User, o.seller_id)
-        delivery = (await db.execute(select(Delivery).where(Delivery.order_id == o.id))).scalar_one_or_none()
+        listing = hy["listings"].get(o.listing_id)
+        buyer = hy["users"].get(o.buyer_id)
+        seller = hy["users"].get(o.seller_id)
         if listing and buyer and seller:
-            out.append(_order_out(o, listing, buyer, seller, delivery))
+            out.append(_order_out(o, listing, buyer, seller, hy["deliveries"].get(o.id)))
     return out
 
 
@@ -201,12 +218,13 @@ async def get_order(order_id: str, user: Principal = Depends(current_user),
 async def ledger(user: Principal = Depends(require_role("admin")),
                  db: AsyncSession = Depends(get_session)) -> list[dict]:
     stmt = select(Order).order_by(Order.created_at.desc())
-    rows = (await db.execute(stmt)).scalars().all()
+    rows = list((await db.execute(stmt)).scalars().all())
+    hy = await _hydrate_orders(db, rows)
     out = []
     for o in rows:
-        listing = await db.get(Listing, o.listing_id)
-        buyer = await db.get(User, o.buyer_id)
-        seller = await db.get(User, o.seller_id)
+        listing = hy["listings"].get(o.listing_id)
+        buyer = hy["users"].get(o.buyer_id)
+        seller = hy["users"].get(o.seller_id)
         out.append({
             "id": o.id,
             "productName": listing.name if listing else "Unknown",

@@ -1,6 +1,7 @@
 """Local file storage — bucketed uploads with size/MIME validation."""
 from __future__ import annotations
 
+import asyncio
 import mimetypes
 import uuid
 from pathlib import Path
@@ -74,9 +75,15 @@ async def save_upload(file: UploadFile, *, bucket: str, user_id: str) -> dict:
 
     out_name = f"{uuid.uuid4().hex}{safe_ext}"
     dest_dir = settings.files_root / bucket / user_id
-    dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / out_name
-    dest.write_bytes(data)
+
+    # Offload the blocking mkdir/write to a thread so a large upload doesn't
+    # stall the event loop (and every concurrent request / SSE stream) on disk I/O.
+    def _persist() -> None:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+
+    await asyncio.to_thread(_persist)
 
     url = f"/files/{bucket}/{user_id}/{out_name}"
     return {
