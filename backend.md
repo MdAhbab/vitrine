@@ -755,7 +755,7 @@ cd .. && uvicorn backend.gateway.app:app --reload --port 8000   # tables auto-cr
 python -m backend.seed                                          # demo data
 # open http://localhost:8000/health and /listings
 ```
-Demo logins: `admin@vitrine.io/admin` · `maker@vitrine.io/maker` · `buyer@vitrine.io/buyer`.
+Demo logins (password = email local-part): `admin@vitrine.io/admin` · buyers `june@vitrine.io/june`, `marco@vitrine.io/marco`, `sana@vitrine.io/sana` · sellers `maker@vitrine.io/maker`, `dev@vitrine.io/dev`, `studio@vitrine.io/studio`.
 
 > Each stubbed endpoint raises `501` or returns a typed placeholder and is tagged
 > `TODO Phase N` in code, so the next AI can grep `TODO Phase` and work the list.
