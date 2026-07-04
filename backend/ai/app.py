@@ -265,6 +265,17 @@ async def admin_ban_user(user_id: str, body: dict, user: Principal = Depends(req
 async def admin_remove_user(user_id: str, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
     u = await db.get(User, user_id)
     if not u: raise HTTPException(404, "User not found")
+    # Deleting a user cascades to their orders/deliveries/payouts. Preserve the
+    # financial trail: refuse the hard delete when commerce history exists and
+    # steer the admin toward a ban instead.
+    has_commerce = (await db.execute(
+        select(Order.id).where(
+            ((Order.buyer_id == user_id) | (Order.seller_id == user_id)),
+            Order.status.in_(["paid", "delivered", "disputed", "refunded"]),
+        ).limit(1)
+    )).first()
+    if has_commerce:
+        raise HTTPException(409, "This user has commerce history — ban them instead of deleting to preserve financial records.")
     await db.delete(u)
     await db.commit()
     return {"ok": True}
@@ -311,6 +322,19 @@ async def submit_report(body: dict, user: Principal = Depends(current_user), db:
 async def admin_delete_listing(listing_id: str, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
     l = await db.get(Listing, listing_id)
     if not l: raise HTTPException(404, "Listing not found")
+    # Archive rather than cascade-delete when the listing has commerce history.
+    has_orders = (await db.execute(
+        select(Order.id).where(
+            Order.listing_id == listing_id,
+            Order.status.in_(["paid", "delivered", "disputed", "refunded"]),
+        ).limit(1)
+    )).first()
+    if has_orders:
+        l.status = "archived"
+        l.expires_at = datetime.now(timezone.utc)
+        db.add(l)
+        await db.commit()
+        return {"ok": True, "archived": True}
     await db.delete(l)
     await db.commit()
     return {"ok": True}
@@ -325,7 +349,14 @@ async def admin_edit_listing(listing_id: str, body: dict, user: Principal = Depe
     if "tagline" in body: l.tagline = body["tagline"]
     if "category" in body: l.category = body["category"]
     if "framework" in body: l.framework = body["framework"]
-    if "price" in body: l.price_cents = int(body["price"] * 100)
+    if "price" in body:
+        try:
+            price = float(body["price"])
+        except (TypeError, ValueError):
+            raise HTTPException(422, "price must be a number")
+        if price < 0:
+            raise HTTPException(422, "price must be non-negative")
+        l.price_cents = round(price * 100)
     if "description" in body: l.description = body["description"]
     if "cover" in body: l.cover = body["cover"]
     if "screenshots" in body: l.screenshots = body["screenshots"]

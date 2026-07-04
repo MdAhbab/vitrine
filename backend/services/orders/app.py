@@ -20,19 +20,9 @@ from backend.shared.schemas.commerce import CheckoutIn, OrderOut, DeliverIn, Pay
 from backend.shared.security import Principal, current_user, require_role
 
 from .providers import get_provider
+from backend.shared.plans import commission_cents as _commission_cents, buyer_cents as _buyer_cents, listing_limit
 
 router = APIRouter(tags=["orders"])
-
-# Default commission % by plan (runtime override lives in admin_configs.fees).
-COMMISSION_PCT = {"free": 12, "studio": 8, "atelier": 5, "maison": 3}
-STUDENT_FREE_PCT = 7.5  # non-subscribed students
-
-
-def _commission_cents(amount_cents: int, plan: str, is_student: bool) -> int:
-    pct = COMMISSION_PCT.get(plan, 12)
-    if plan == "free" and is_student:
-        pct = STUDENT_FREE_PCT
-    return round(amount_cents * pct / 100)
 
 
 def _order_out(o: Order, listing: Listing, buyer: User, seller: User, delivery: Delivery | None = None) -> OrderOut:
@@ -66,8 +56,12 @@ async def checkout(body: CheckoutIn, user: Principal = Depends(current_user),
     else:
         base_cents, tier_name, tier_id = listing.price_cents, "Source", None
 
-    buyer_cents = round(base_cents * 1.02)
-    commission_cents = round(base_cents * 0.12)
+    # Buyer pays the processing markup; the platform cut honours the SELLER's
+    # plan tier + student status (previously hardcoded to 12% — see plans.py).
+    buyer_cents = _buyer_cents(base_cents)
+    commission_cents = _commission_cents(
+        base_cents, seller.plan, bool(seller.is_student and seller.plan == "free")
+    )
 
     provider = get_provider()
     session = await provider.create_checkout(order_id="pending", amount_cents=buyer_cents)
@@ -135,31 +129,41 @@ async def deliver(order_id: str, body: DeliverIn | None = None,
     o = await db.get(Order, order_id)
     if not o or (o.seller_id != user.id and user.role != "admin"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Order not found")
-        
+
+    # Only paid (or already-delivered, for re-issuing artifacts) orders can be
+    # fulfilled — never a pending/refunded/disputed order.
+    if o.status not in ("paid", "delivered"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Order must be paid before delivery (current status: {o.status})",
+        )
+
     o.status = "delivered"
-    
+
     delivery = (await db.execute(
         select(Delivery).where(Delivery.order_id == o.id)
     )).scalar_one_or_none()
-    
+
     artifact_url = (body.artifact_url if body else None) or "https://vitrine.io/downloads/stub"
-    license_key = f"LIC-{uuid.uuid4().hex[:8].upper()}"
-    
+
     if not delivery:
         delivery = Delivery(
             order_id=o.id,
             artifact_url=artifact_url,
-            license_key=license_key,
+            # License key is minted server-side ONCE and never regenerated, so a
+            # buyer's key stays stable across re-deliveries.
+            license_key=f"LIC-{uuid.uuid4().hex[:8].upper()}",
             delivered_at=datetime.now(timezone.utc)
         )
         db.add(delivery)
     else:
         delivery.artifact_url = artifact_url
-        delivery.license_key = license_key
+        if not delivery.license_key:
+            delivery.license_key = f"LIC-{uuid.uuid4().hex[:8].upper()}"
         delivery.delivered_at = datetime.now(timezone.utc)
-        
+
     await db.commit()
-    return {"status": "delivered", "order_id": order_id}
+    return {"status": "delivered", "order_id": order_id, "license_key": delivery.license_key}
 
 
 @router.get("/orders", response_model=list[OrderOut])
@@ -277,15 +281,8 @@ async def subscribe(body: SubscribeIn,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
         
     u.plan = body.tier
-    
-    PLAN_LIMITS = {
-        "free": 2,
-        "studio": 10,
-        "atelier": 40,
-        "maison": 999999,
-    }
-    limit = PLAN_LIMITS.get(body.tier, 999999)
-    
+    limit = listing_limit(body.tier)
+
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     stmt = (

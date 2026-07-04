@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     # hosting / previews -------------------------------------------------
     ALLOWED_PREVIEW_HOSTS: str = "vercel.app,preview.vitrine.app,demo.vitrine.app"
 
+    # security -----------------------------------------------------------
+    # Only honour X-Forwarded-For when we sit behind a trusted reverse proxy
+    # (nginx in the cloud deploy). Off by default so the rate limiter can't be
+    # bypassed by a spoofed header in direct-exposure/dev setups.
+    TRUST_PROXY_HEADERS: bool = False
+    # Domains accepted as evidence of student status for the discounted tier.
+    ACADEMIC_EMAIL_SUFFIXES: str = ".edu,.ac.uk,.edu.bd,.ac.bd,.edu.au,.ac.in,.edu.pk,.edu.my,.ac.nz"
+
     # negotiation rules --------------------------------------------------
     MAX_ACTIVE_REPS_PER_BUYER: int = 2  # see AGENTS.md Buyer Negotiator
 
@@ -65,6 +73,10 @@ class Settings(BaseSettings):
     @property
     def allowed_preview_hosts(self) -> list[str]:
         return [h.strip() for h in self.ALLOWED_PREVIEW_HOSTS.split(",") if h.strip()]
+
+    @property
+    def academic_email_suffixes(self) -> list[str]:
+        return [s.strip().lower() for s in self.ACADEMIC_EMAIL_SUFFIXES.split(",") if s.strip()]
 
     @property
     def files_root(self) -> Path:

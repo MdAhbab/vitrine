@@ -285,10 +285,27 @@ async def recommend_similar(id: str) -> dict:
                 })
         return {"results": results}
 
+def _preview_host_allowed(url: str) -> bool:
+    """Only allow-listed preview hosts may be fetched server-side (anti-SSRF)."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    return any(host == h or host.endswith("." + h) for h in settings.allowed_preview_hosts)
+
+
 @register("check_demo_health", "Ping a preview URL for liveness",
           {"type": "object", "properties": {"url": {"type": "string"}},
            "required": ["url"]})
 async def check_demo_health(url: str) -> dict:
+    # Guardrail: this tool makes the SERVER issue an outbound request, so a
+    # seller-supplied URL must be host-allow-listed or it becomes an SSRF vector
+    # (e.g. http://169.254.169.254/... cloud metadata). Mirrors hosting/_host_allowed.
+    if not _preview_host_allowed(url):
+        return {"url": url, "health": "down", "error": "host not allow-listed"}
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             res = await client.get(url)

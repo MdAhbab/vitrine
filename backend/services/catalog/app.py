@@ -9,13 +9,17 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status, Response
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.shared.db import get_session
 from backend.shared.events import bus
 from backend.shared.ids import slugify
 from backend.shared.models import Listing, ListingField, ListingTier, User, FeatureRequest, Chat, ChatMessage, AnalyticEvent, Order, AdminConfig
+from backend.shared.plans import listing_limit
+
+# Listing statuses that count against a seller's active-listing quota.
+_ACTIVE_LISTING_STATUSES = ("draft", "enriching", "review", "live", "flagged", "paused")
 from backend.shared.schemas.listing import IntakeIn, ListingCreateIn, ProductOut, AnalyticsEventIn, SellerAnalyticsOut, AdminAnalyticsOut
 from backend.shared.security import Principal, current_user, require_role, optional_user, ai_rate_limit
 
@@ -128,10 +132,28 @@ async def create_listing(
     user: Principal = Depends(require_role("seller", "admin")),
     db: AsyncSession = Depends(get_session),
 ) -> ProductOut:
+    # Enforce the plan's active-listing quota at creation time (admins exempt).
+    if user.role != "admin":
+        owner = await db.get(User, user.id)
+        limit = listing_limit(owner.plan if owner else "free")
+        now = datetime.now(timezone.utc)
+        active = (await db.execute(
+            select(func.count()).select_from(Listing).where(
+                Listing.owner_id == user.id,
+                Listing.status.in_(_ACTIVE_LISTING_STATUSES),
+                (Listing.expires_at == None) | (Listing.expires_at > now),
+            )
+        )).scalar_one()
+        if active >= limit:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"Your plan allows up to {limit} active listings. Upgrade to add more.",
+            )
+
     listing = Listing(
         owner_id=user.id, name=body.name, slug=await _unique_slug(db, body.name),
         tagline=body.tagline, category=body.category,
-        price_cents=int(body.price * 100), status="draft",
+        price_cents=round(body.price * 100), status="draft",
     )
     db.add(listing)
     await db.commit()
@@ -180,7 +202,13 @@ async def update_listing(listing_id: str, patch: dict,
     if "framework" in patch:
         listing.framework = patch["framework"]
     if "price" in patch:
-        listing.price_cents = int(patch["price"] * 100)
+        try:
+            price = float(patch["price"])
+        except (TypeError, ValueError):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "price must be a number")
+        if price < 0:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "price must be non-negative")
+        listing.price_cents = round(price * 100)
     if "description" in patch:
         listing.description = patch["description"]
     if "cover" in patch:
@@ -239,6 +267,23 @@ async def delete_listing(listing_id: str,
     listing = await db.get(Listing, listing_id)
     if not listing or (listing.owner_id != user.id and user.role != "admin"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
+
+    # A hard delete cascades to orders/deliveries/payouts. If this listing has
+    # any real commerce history, archive it instead so financial records and the
+    # buyer's license keys survive.
+    has_orders = (await db.execute(
+        select(func.count()).select_from(Order).where(
+            Order.listing_id == listing_id,
+            Order.status.in_(["paid", "delivered", "disputed", "refunded"]),
+        )
+    )).scalar_one()
+    if has_orders:
+        listing.status = "archived"
+        listing.expires_at = datetime.now(timezone.utc)
+        db.add(listing)
+        await db.commit()
+        return Response(status_code=204)
+
     await db.delete(listing)
     await db.commit()
     return Response(status_code=204)
@@ -641,7 +686,15 @@ async def repost_listing(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
     if listing.owner_id != user.id and user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Forbidden")
-        
+
+    # A repost must not launder a listing past moderation. Anything under review
+    # or flagged/rejected stays gated until an admin resolves it.
+    if listing.status in ("review", "flagged", "rejected") and user.role != "admin":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This listing is under moderation and can't be reposted until it's resolved.",
+        )
+
     from backend.ai.agents import pricing
     agent_res = await pricing.run(listing_id)
     if not agent_res or "error" in agent_res:

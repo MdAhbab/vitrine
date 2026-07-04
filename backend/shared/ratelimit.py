@@ -65,8 +65,17 @@ _limiter = _RedisLimiter() if settings.CACHE == "redis" else _memory
 
 
 def client_key(request: Request, scope: str) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+    ip = request.client.host if request.client else "unknown"
+    # Only trust X-Forwarded-For behind a known reverse proxy (TRUST_PROXY_HEADERS).
+    # Our nginx appends the real client as the LAST hop, so the rightmost entry is
+    # authoritative — taking the leftmost (client-supplied) value lets anyone mint
+    # a fresh bucket per request and bypass the limiter entirely.
+    if settings.TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+            if parts:
+                ip = parts[-1]
     return f"{scope}:{ip}"
 
 

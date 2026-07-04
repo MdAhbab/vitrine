@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.shared.db import get_session
 from backend.shared.events import bus
 from backend.shared.models import User
+from backend.shared.settings import settings
 from backend.shared.schemas.auth import LoginIn, SignupIn, TokenOut, UserOut, RefreshIn, ProfileUpdateIn, ChangePasswordIn
 from backend.shared.security import (
     Principal,
@@ -113,9 +114,18 @@ async def me(user: Principal = Depends(current_user),
 @router.post("/users/verify-student", response_model=UserOut)
 async def verify_student(user: Principal = Depends(current_user),
                          db: AsyncSession = Depends(get_session)) -> UserOut:
-    # TODO: accept an academic-email / credential upload and verify it.
-    # Scaffold: flip the flag so the 25% student discount becomes available.
     u = await db.get(User, user.id)
+    if not u:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    # Require lightweight evidence: the account email must be from a recognised
+    # academic domain. This closes the "any user self-flips for the discount"
+    # hole; a full credential-upload flow can layer on top later.
+    email = (u.email or "").lower()
+    if not any(email.endswith(sfx) for sfx in settings.academic_email_suffixes):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Student status requires an academic email (e.g. .edu, .ac.uk).",
+        )
     u.is_student = True
     u.student_verified = True
     await db.commit()
