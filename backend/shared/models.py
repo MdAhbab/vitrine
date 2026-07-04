@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy import JSON as SAJSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -259,6 +259,9 @@ class Negotiation(PK, Base):
 # ── reviews ─────────────────────────────────────────────────────────────────
 class Review(PK, Base):
     __tablename__ = "reviews"
+    # One review per buyer per listing, enforced at the DB level — the
+    # check-then-insert in the endpoint alone is racy under concurrency.
+    __table_args__ = (UniqueConstraint("buyer_id", "listing_id", name="uq_review_buyer_listing"),)
 
     listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
     buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)

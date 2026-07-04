@@ -80,6 +80,9 @@ async def _sqlite_additive_columns() -> None:
         "ALTER TABLE users ADD COLUMN theme_default VARCHAR(16) DEFAULT 'dark'",
         "ALTER TABLE users ADD COLUMN minimal_profile BOOLEAN DEFAULT 0",
         "ALTER TABLE users ADD COLUMN ai_points INTEGER DEFAULT 100",
+        # DB-level backstop for the one-review-per-buyer-per-listing invariant
+        # (the endpoint's check-then-insert alone is racy under concurrency).
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_review_buyer_listing ON reviews (buyer_id, listing_id)",
     ]
     async with engine.begin() as conn:
         for stmt in alters:

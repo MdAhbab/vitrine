@@ -62,6 +62,15 @@ def _msg_out(m: ChatMessage) -> MessageOut:
 
 
 _active_agent_replies: set[str] = set()
+# Strong refs to in-flight reply tasks so they can't be garbage-collected
+# mid-run (asyncio only keeps weak refs to tasks).
+_reply_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_agent_reply(chat_id: str) -> None:
+    task = asyncio.create_task(_trigger_agent_reply(chat_id))
+    _reply_tasks.add(task)
+    task.add_done_callback(_reply_tasks.discard)
 
 
 async def _trigger_agent_reply(chat_id: str) -> None:
@@ -101,8 +110,33 @@ async def list_chats(user: Principal = Depends(current_user),
         stmt = select(Chat)
     else:
         stmt = select(Chat).where((Chat.buyer_id == user.id) | (Chat.seller_id == user.id))
-    rows = (await db.execute(stmt.order_by(Chat.created_at.desc()))).scalars().all()
-    return [await _thread_out(db, c) for c in rows]
+    rows = list((await db.execute(stmt.order_by(Chat.created_at.desc()))).scalars().all())
+    if not rows:
+        return []
+    # Batch the listing/user lookups (was 3 queries per chat).
+    listing_ids = list({c.listing_id for c in rows})
+    user_ids = list({uid for c in rows for uid in (c.buyer_id, c.seller_id)})
+    listings = {l.id: l for l in
+                (await db.execute(select(Listing).where(Listing.id.in_(listing_ids)))).scalars()}
+    users = {u.id: u for u in
+             (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars()}
+    out = []
+    for c in rows:
+        listing = listings.get(c.listing_id)
+        buyer = users.get(c.buyer_id)
+        seller = users.get(c.seller_id)
+        out.append(ThreadOut(
+            id=c.id, productId=c.listing_id,
+            productName=listing.name if listing else "",
+            productCover=(listing.cover or "") if listing else "",
+            buyerId=c.buyer_id, buyerName=buyer.display_name if buyer else "",
+            sellerId=c.seller_id, sellerName=seller.display_name if seller else "",
+            isAgent=c.is_agent,
+            agentBudget=(c.agent_budget_cents / 100) if c.agent_budget_cents else None,
+            status=c.status, unreadFor=c.unread_for or [],
+            createdAt=int(c.created_at.timestamp() * 1000),
+        ))
+    return out
 
 
 @router.get("/chats/{chat_id}/messages", response_model=list[MessageOut])
@@ -139,9 +173,16 @@ async def send_message(chat_id: str, body: SendMessageIn,
 
     if chat.is_agent and user.id == chat.seller_id:
         await ai_rate_limit(request)
-        asyncio.create_task(_trigger_agent_reply(chat_id))
+        _spawn_agent_reply(chat_id)
 
     return _msg_out(msg)
+
+
+# Serialises the count-check + insert for the "max active reps" invariant.
+# Without it, two near-simultaneous requests (double-click / two tabs) both read
+# the same count and both proceed. A process-level lock is sufficient for the
+# monolith runtime; a DB constraint takes over if the service is ever split.
+_rep_start_lock = asyncio.Lock()
 
 
 @router.post("/chats/negotiate/start", response_model=ThreadOut, dependencies=[Depends(ai_rate_limit)])
@@ -152,28 +193,31 @@ async def start_negotiation(body: StartNegotiationIn,
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only buyers can dispatch a rep")
     if body.budget <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Budget must be greater than zero")
-    active = (await db.execute(
-        select(func.count()).select_from(Chat)
-        .where(Chat.buyer_id == user.id, Chat.is_agent.is_(True), Chat.status == "open")
-    )).scalar_one()
-    if active >= settings.MAX_ACTIVE_REPS_PER_BUYER:
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            f"Max {settings.MAX_ACTIVE_REPS_PER_BUYER} active reps reached")
 
     listing = await db.get(Listing, body.listing_id)
     if not listing:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
-    chat = Chat(buyer_id=user.id, seller_id=listing.owner_id, listing_id=listing.id,
-                is_agent=True, agent_budget_cents=int(body.budget * 100),
-                status="open", unread_for=["seller"])
-    db.add(chat)
-    await db.flush()
-    db.add(Negotiation(chat_id=chat.id, buyer_id=user.id, status="active",
-                       budget_cents=int(body.budget * 100),
-                       buyer_readme_context=body.readme_context))
-    await db.commit()
+
+    async with _rep_start_lock:
+        active = (await db.execute(
+            select(func.count()).select_from(Chat)
+            .where(Chat.buyer_id == user.id, Chat.is_agent.is_(True), Chat.status == "open")
+        )).scalar_one()
+        if active >= settings.MAX_ACTIVE_REPS_PER_BUYER:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"Max {settings.MAX_ACTIVE_REPS_PER_BUYER} active reps reached")
+
+        chat = Chat(buyer_id=user.id, seller_id=listing.owner_id, listing_id=listing.id,
+                    is_agent=True, agent_budget_cents=int(body.budget * 100),
+                    status="open", unread_for=["seller"])
+        db.add(chat)
+        await db.flush()
+        db.add(Negotiation(chat_id=chat.id, buyer_id=user.id, status="active",
+                           budget_cents=int(body.budget * 100),
+                           buyer_readme_context=body.readme_context))
+        await db.commit()
     await db.refresh(chat)
-    asyncio.create_task(_trigger_agent_reply(chat.id))
+    _spawn_agent_reply(chat.id)
     return await _thread_out(db, chat)
 
 

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 
 from fastapi import HTTPException, Request, status
 
@@ -26,12 +25,24 @@ async def _get_redis():
 
 
 class _MemoryLimiter:
+    _PRUNE_EVERY = 512  # amortised cleanup cadence (checks between sweeps)
+
     def __init__(self) -> None:
-        self._buckets: dict[str, tuple[float, int]] = defaultdict(lambda: (0.0, 0))
+        self._buckets: dict[str, tuple[float, int]] = {}
+        self._checks_since_prune = 0
+
+    def _prune(self, now: float) -> None:
+        """Drop expired buckets so the map can't grow one entry per client IP
+        forever (a slow but unbounded memory leak under real traffic)."""
+        self._buckets = {k: v for k, v in self._buckets.items() if v[0] > now}
 
     async def check(self, key: str, limit: int, window: int) -> None:
         now = time.time()
-        reset_at, count = self._buckets[key]
+        self._checks_since_prune += 1
+        if self._checks_since_prune >= self._PRUNE_EVERY:
+            self._checks_since_prune = 0
+            self._prune(now)
+        reset_at, count = self._buckets.get(key, (0.0, 0))
         if now >= reset_at:
             self._buckets[key] = (now + window, 1)
             return

@@ -220,23 +220,34 @@ async def run_json(agent: str, system: str, user_msg: str, *,
     Returns (parsed_dict_or_None, is_stub). Used by agents that need coherent
     structured output (Pricing, Feature estimator) instead of a tool loop.
     """
+    from backend.shared.settings import settings
+
     system = await resolve_system_prompt(agent, system)
     try:
         budget.check()
     except BudgetExceeded:
         return None, True
 
-    result = await client.chat(
-        [{"role": "system", "content": system}, {"role": "user", "content": user_msg}],
-        json_mode=True,
-    )
-    budget.record(result.cost_usd)
-    async with SessionLocal() as db:
-        db.add(AgentRun(agent=agent, listing_id=listing_id, trigger_event=trigger,
-                        input_hash="", model=result.model, tokens_in=result.tokens_in,
-                        tokens_out=result.tokens_out, cost_usd=result.cost_usd,
-                        status="degraded" if result.stub else "ok"))
-        await db.commit()
-    if result.stub:
-        return None, True
-    return parse_json(result.text), False
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user_msg}]
+    parsed: dict | None = None
+    result = None
+    # Schema-reject -> retry, per AGENTS.md §0.1 (max AGENT_MAX_RETRIES).
+    for attempt in range(1 + max(0, settings.AGENT_MAX_RETRIES)):
+        result = await client.chat(messages, json_mode=True)
+        budget.record(result.cost_usd)
+        async with SessionLocal() as db:
+            db.add(AgentRun(agent=agent, listing_id=listing_id, trigger_event=trigger,
+                            input_hash="", model=result.model, tokens_in=result.tokens_in,
+                            tokens_out=result.tokens_out, cost_usd=result.cost_usd,
+                            status="degraded" if result.stub else "ok"))
+            await db.commit()
+        if result.stub:
+            return None, True
+        parsed = parse_json(result.text)
+        if parsed is not None:
+            return parsed, False
+        # Nudge the model once with its own invalid output before retrying.
+        messages.append({"role": "assistant", "content": result.text})
+        messages.append({"role": "user",
+                         "content": "That was not valid JSON. Reply with ONLY the JSON object."})
+    return None, False

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.shared.db import get_session
@@ -70,7 +71,12 @@ async def create_review(body: dict, user: Principal = Depends(current_user),
         verified_purchase=verified_purchase
     )
     db.add(rev)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Unique (buyer_id, listing_id) index fired — concurrent double-submit.
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "You have already reviewed this listing")
     
     # Recompute rating rollup
     all_revs = (await db.execute(

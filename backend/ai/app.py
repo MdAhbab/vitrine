@@ -172,11 +172,17 @@ async def agent_runs(user: Principal = Depends(require_role("admin")),
 @router.get("/admin/verification-queue", response_model=list[dict])
 async def verification_queue(user: Principal = Depends(require_role("admin")),
                              db: AsyncSession = Depends(get_session)) -> list[dict]:
-    stmt = select(Listing)
-    rows = (await db.execute(stmt)).scalars().all()
+    # The admin "queue" tab doubles as the listing manager, so return all
+    # listings — but surface items awaiting moderation first, newest first.
+    rows = list((await db.execute(select(Listing).order_by(Listing.created_at.desc()))).scalars().all())
+    _pending = {"review": 0, "flagged": 1, "enriching": 2}
+    rows.sort(key=lambda r: _pending.get(r.status, 9))
+    sellers = {u.id: u for u in (await db.execute(
+        select(User).where(User.id.in_(list({r.owner_id for r in rows})))
+    )).scalars()} if rows else {}
     res = []
     for r in rows:
-        seller = await db.get(User, r.owner_id)
+        seller = sellers.get(r.owner_id)
         res.append({
             "id": r.id,
             "name": r.name,
@@ -217,12 +223,20 @@ async def admin_decision(listing_id: str, body: dict,
 async def admin_chats(user: Principal = Depends(require_role("admin")),
                       db: AsyncSession = Depends(get_session)) -> list[dict]:
     stmt = select(Chat).order_by(Chat.created_at.desc())
-    rows = (await db.execute(stmt)).scalars().all()
+    rows = list((await db.execute(stmt)).scalars().all())
+    if not rows:
+        return []
+    listings = {l.id: l for l in (await db.execute(
+        select(Listing).where(Listing.id.in_(list({c.listing_id for c in rows})))
+    )).scalars()}
+    users = {u.id: u for u in (await db.execute(
+        select(User).where(User.id.in_(list({uid for c in rows for uid in (c.buyer_id, c.seller_id)})))
+    )).scalars()}
     res = []
     for c in rows:
-        listing = await db.get(Listing, c.listing_id)
-        buyer = await db.get(User, c.buyer_id)
-        seller = await db.get(User, c.seller_id)
+        listing = listings.get(c.listing_id)
+        buyer = users.get(c.buyer_id)
+        seller = users.get(c.seller_id)
         res.append({
             "id": c.id,
             "productId": c.listing_id,

@@ -465,7 +465,52 @@ async def bayesian_rating(id: str) -> dict:
           {"type": "object", "properties": {"image_url": {"type": "string"}},
            "required": ["image_url"]})
 async def vision_score_ui(image_url: str) -> dict:
-    return {"ui_score": 0.85, "reason": "Harmonious typographic hierarchies and modern spacing borders detected."}
+    """UI-quality signal for the Vitrine Score (README §6: one vision call per
+    image, cached by hash). When no vision model is reachable, returns an
+    honestly-labelled heuristic instead of a fabricated 'analysis'."""
+    from backend.shared.cache import cache, content_hash
+
+    if not image_url:
+        return {"ui_score": 0.4, "reason": "No cover image provided (heuristic).", "source": "heuristic"}
+
+    key = f"vision:{content_hash(image_url)}"
+    if cached := await cache.get(key):
+        return cached
+
+    result: dict | None = None
+    # Only a publicly-fetchable absolute URL can be scored by a vision model.
+    if image_url.startswith(("http://", "https://")):
+        try:
+            from backend.ai.client import client as ai_client
+            resp = await ai_client.chat([
+                {"role": "system", "content": (
+                    "You are a strict UI-quality judge. Score the screenshot's visual "
+                    "polish (typography, spacing, hierarchy, color discipline) from 0 to 100. "
+                    'Reply with JSON only: {"score": <int>, "reason": "<one sentence>"}')},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Score this product screenshot."},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ]},
+            ])
+            if not resp.stub and resp.text:
+                m = re.search(r'"score"\s*:\s*(\d{1,3})', resp.text)
+                if m:
+                    score = max(0, min(100, int(m.group(1)))) / 100.0
+                    reason_m = re.search(r'"reason"\s*:\s*"([^"]{1,300})"', resp.text)
+                    result = {"ui_score": round(score, 2),
+                              "reason": reason_m.group(1) if reason_m else "Vision model score.",
+                              "source": "vision"}
+        except Exception:
+            result = None
+
+    if result is None:
+        # Deterministic, honest fallback: presence of a cover is worth a modest
+        # baseline; it makes no claims about what the image looks like.
+        result = {"ui_score": 0.7, "reason": "Cover image present; vision model not available (heuristic).",
+                  "source": "heuristic"}
+
+    await cache.set(key, result, ttl=30 * 86400)  # once per image, cached
+    return result
 
 @register("rank_and_section", "Assign gallery slots based on Vitrine Score",
           {"type": "object", "properties": {"id": {"type": "string"}, "score": {"type": "number"}},

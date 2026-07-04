@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -16,6 +17,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .settings import settings
+
+_log = logging.getLogger("vitrine.eventbus")
 
 Handler = Callable[[dict], Awaitable[None]]
 STREAM = "vitrine:events"
@@ -37,6 +40,10 @@ def make_event(type_: str, payload: dict, *, actor: str = "system",
 class _MemoryBus:
     def __init__(self) -> None:
         self._subs: dict[str, list[Handler]] = defaultdict(list)
+        # Hold strong refs to in-flight handler tasks. Without this, Python may
+        # garbage-collect a running task mid-execution (see asyncio docs), which
+        # would silently drop pipeline events (listing.created -> intake, ...).
+        self._tasks: set[asyncio.Task] = set()
 
     def subscribe(self, topic: str, handler: Handler) -> None:
         self._subs[topic].append(handler)
@@ -47,7 +54,9 @@ class _MemoryBus:
         prefix = type_.split(".", 1)[0] + ".*"
         handlers += self._subs.get(prefix, [])
         for h in handlers:
-            asyncio.create_task(_safe(h, event))
+            task = asyncio.create_task(_safe(h, event))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
 
 class _RedisBus:
@@ -123,8 +132,10 @@ class _RedisBus:
 async def _safe(handler: Handler, event: dict) -> None:
     try:
         await handler(event)
-    except Exception as exc:
-        print(f"[eventbus] handler error on {event['type']}: {exc}")
+    except Exception:
+        # Full traceback, not just the message — a swallowed handler error here
+        # is otherwise invisible (dropped pipeline event with no trace).
+        _log.exception("[eventbus] handler error on %s", event.get("type"))
 
 
 def get_bus() -> _MemoryBus | _RedisBus:

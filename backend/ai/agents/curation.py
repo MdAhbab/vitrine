@@ -17,6 +17,29 @@ def _score(signals: dict[str, float]) -> float:
     return round(100 * sum(WEIGHTS[k] * signals.get(k, 0) for k in WEIGHTS), 1)
 
 
+async def _engagement(listing_id: str) -> float:
+    """Engagement signal from real analytic events (was a hardcoded 0.7).
+
+    Views count once, demo launches 3x (stronger intent), scaled so ~150
+    weighted events over 14 days saturates the signal. Floor of 0.3 keeps new
+    listings from being buried purely for lack of traffic history.
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func, select
+    from backend.shared.models import AnalyticEvent
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+    async with SessionLocal() as db:
+        rows = (await db.execute(
+            select(AnalyticEvent.event_type, func.count())
+            .where(AnalyticEvent.listing_id == listing_id, AnalyticEvent.created_at >= cutoff)
+            .group_by(AnalyticEvent.event_type)
+        )).all()
+    counts = {etype: n for etype, n in rows}
+    weighted = counts.get("view", 0) + 3 * counts.get("launch", 0)
+    return round(min(1.0, max(0.3, weighted / 150)), 2)
+
+
 async def run(listing_id: str) -> dict:
     from backend.ai.tools import compute_features, bayesian_rating, vision_score_ui
     
@@ -34,12 +57,12 @@ async def run(listing_id: str) -> dict:
         
     rating_res = await bayesian_rating(listing_id)
     reviews = rating_res.get("rating", 4.0) / 5.0
-    
+
     ui_res = await vision_score_ui(cover_url)
     ui = ui_res.get("ui_score", 0.8)
-    
-    engagement = 0.7
-    
+
+    engagement = await _engagement(listing_id)
+
     signals = {
         "completeness": completeness,
         "verification": verification,

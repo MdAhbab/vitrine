@@ -1,6 +1,7 @@
 """Buyer Concierge Agent — NL discovery (streamed). See AGENTS.md §3."""
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 from backend.shared.db import SessionLocal
@@ -66,7 +67,6 @@ async def stream(query: str, history: list[dict] | None = None) -> AsyncIterator
         answer = _fallback_answer(query, rows)
         for word in answer.split(" "):
             yield {"type": "token", "text": word + " "}
-            import asyncio
             await asyncio.sleep(0.02)
         yield {"type": "done"}
         return
@@ -93,7 +93,12 @@ async def stream(query: str, history: list[dict] | None = None) -> AsyncIterator
 
     try:
         resp = await client.chat(messages, model=settings.OPENAI_MODEL)
-        answer = resp.text.strip() if resp.text else _fallback_answer(query, rows)
+        # In offline/stub mode the client echoes the prompt back — stream the
+        # deterministic grounded answer instead of leaking "[stub:…] echo: …".
+        if resp.stub or not (resp.text or "").strip():
+            answer = _fallback_answer(query, rows)
+        else:
+            answer = resp.text.strip()
         is_stub = resp.stub
         cost = resp.cost_usd
         tokens_in = resp.tokens_in
@@ -114,7 +119,6 @@ async def stream(query: str, history: list[dict] | None = None) -> AsyncIterator
 
     for word in answer.split(" "):
         yield {"type": "token", "text": word + " "}
-        import asyncio
         await asyncio.sleep(0.02)
 
     yield {"type": "done"}
