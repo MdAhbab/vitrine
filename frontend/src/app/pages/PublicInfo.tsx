@@ -32,9 +32,11 @@ const PAGE: Record<InfoKind, {
   about: {
     eyebrow: 'About Us',
     title: 'About Vitrine',
-    summary: 'Page currently developing beautifully.',
+    summary: 'Software is sold in a hurry — six cards in a grid, three feature bullets, a "Buy now" button. We thought it deserved a vitrine, in the original sense: a glass case where you can see the object, turn it over, and hold it under the light.',
     items: [
-      { icon: 'sparkles', title: 'In development', text: 'Page currently developing beautifully.' },
+      { icon: 'sparkles', title: 'Why we exist', text: 'Every piece on Vitrine ships with a live, runnable preview. Try it like a print, then take it home like a book.' },
+      { icon: 'check', title: 'How we curate', text: 'Curators and our agent fleet score every submission on completeness, UI craft, demo health, reviews, recency, and engagement. The Vitrine Score is the aggregate; judgment frames the wall.' },
+      { icon: 'store', title: 'Where to find us', text: 'We work out of two small studios in Lisbon and Brooklyn. We answer email, and we send a quiet newsletter on the first Thursday of every month.' },
     ],
   },
 };

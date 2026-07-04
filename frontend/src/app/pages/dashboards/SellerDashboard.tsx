@@ -112,12 +112,14 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
   const repThreads = myThreads.filter((t) => t.isAgent);
   const myTxns = transactions.filter((t) => t.sellerName === user.name || t.sellerId === user.id);
   const grossEarnings = myTxns.reduce((s, t) => s + (t.amount - t.commission), 0);
-  const displayEarnings = analytics ? analytics.earnings_all_time : (myTxns.length ? grossEarnings : 8140);
-  
-  const viewsVal = analytics ? analytics.views_14d.toLocaleString() : "14,328";
-  const launchesVal = analytics ? analytics.launches_14d.toLocaleString() : "1,204";
-  const conversionVal = analytics ? `${analytics.conversion_rate}%` : "3.4%";
-  const chartData = analytics ? analytics.history : mockSeries;
+  // Never invent money: real mode falls back to the order-derived figure (0
+  // for a new seller) while analytics load; the demo dressing is mock-only.
+  const displayEarnings = analytics ? analytics.earnings_all_time : grossEarnings;
+
+  const viewsVal = analytics ? analytics.views_14d.toLocaleString() : (USE_MOCKS ? '14,328' : '—');
+  const launchesVal = analytics ? analytics.launches_14d.toLocaleString() : (USE_MOCKS ? '1,204' : '—');
+  const conversionVal = analytics ? `${analytics.conversion_rate}%` : (USE_MOCKS ? '3.4%' : '—');
+  const chartData = analytics ? analytics.history : (USE_MOCKS ? mockSeries : []);
   
   const paidAwaitingDelivery = myTxns.filter((t) => t.status === 'paid' && !(t as { delivered?: boolean }).delivered);
   const discount = user.isStudent ? 0.75 : 1;
@@ -338,7 +340,7 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
               >
                 {payoutBusy ? 'Requesting…' : 'Request payout'}
               </button>
-              <p className="text-xs text-text-muted mt-3">Next automatic payout · Friday, 12:00 UTC</p>
+              <p className="text-xs text-text-muted mt-3">Payouts are reviewed and settle to your bank on file.</p>
             </aside>
           </div>
         )}

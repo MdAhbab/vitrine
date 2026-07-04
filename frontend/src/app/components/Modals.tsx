@@ -562,11 +562,10 @@ export function CheckoutModal({ open, onClose, product, tierIndex = 0 }: { open:
         <div className="p-10 text-center">
           <div className="w-16 h-16 mx-auto rounded-full gold-gradient grid place-items-center text-[var(--accent-ink)]"><Check size={24} /></div>
           <h3 className="font-serif text-3xl mt-5">It's yours.</h3>
-          <p className="text-sm mt-3 max-w-md mx-auto">{product.name} is now in your library. The seller has been notified and will deliver within 24 hours. License key and download link have been emailed.</p>
-          <div className="hairline rounded-xl bg-surface-2/40 p-4 max-w-sm mx-auto mt-6 font-mono text-xs">
-            <div className="text-text-muted uppercase tracking-wider text-[10px]">License key</div>
-            <div className="mt-1 tabular">VTRN-{Math.random().toString(36).slice(2, 6).toUpperCase()}-{Math.random().toString(36).slice(2, 6).toUpperCase()}</div>
-          </div>
+          <p className="text-sm mt-3 max-w-md mx-auto">
+            {product.name} is now in your library. Your payment is held in escrow while the seller
+            prepares delivery — your license key appears on the order as soon as they deliver.
+          </p>
           <button onClick={onClose} className="mt-8 bg-text text-bg rounded-xl px-6 h-11 font-medium">Done</button>
         </div>
       )}
