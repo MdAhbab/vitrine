@@ -19,7 +19,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+)
 from sqlalchemy import JSON as SAJSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -67,6 +69,15 @@ class User(PK, Base):
 # ── catalog ─────────────────────────────────────────────────────────────────
 class Listing(PK, Base):
     __tablename__ = "listings"
+
+    # The storefront's only two read shapes are
+    #   WHERE status='live' [AND category=?] ORDER BY vitrine_score DESC
+    # Single-column indexes on status/category left the sort as a filesort over
+    # every live row; these cover filter + ordering together.
+    __table_args__ = (
+        Index("ix_listings_status_score", "status", "vitrine_score"),
+        Index("ix_listings_status_category_score", "status", "category", "vitrine_score"),
+    )
 
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     slug: Mapped[str] = mapped_column(String(160), unique=True, index=True)
@@ -160,6 +171,16 @@ class ListingEmbedding(Base):
 class Order(PK, Base):
     __tablename__ = "orders"
 
+    # Every hot order query filters on an id *and* status together: payout
+    # eligibility (seller+delivered), verified-purchase checks (buyer+listing+
+    # paid), and the delete-listing commerce guard (listing+status).
+    __table_args__ = (
+        Index("ix_orders_seller_status", "seller_id", "status"),
+        Index("ix_orders_listing_status", "listing_id", "status"),
+        Index("ix_orders_buyer_listing_status", "buyer_id", "listing_id", "status"),
+        Index("ix_orders_provider_ref", "provider_ref"),
+    )
+
     buyer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     listing_id: Mapped[str] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
     seller_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
@@ -199,6 +220,9 @@ class Payout(PK, Base):
 class Subscription(PK, Base):
     __tablename__ = "subscriptions"
 
+    # Plan lookups always ask "the seller's *active* subscription".
+    __table_args__ = (Index("ix_subscriptions_seller_active", "seller_id", "active"),)
+
     seller_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     tier: Mapped[str] = mapped_column(String(16), default="free")  # free|studio|atelier|maison
     price_cents: Mapped[int] = mapped_column(Integer, default=0)
@@ -236,6 +260,10 @@ class Chat(PK, Base):
 
 class ChatMessage(PK, Base):
     __tablename__ = "chat_messages"
+
+    # Messages are always read as "this thread, in time order" — and the Inbox
+    # polls it every few seconds, so this is one of the hottest reads.
+    __table_args__ = (Index("ix_chat_messages_chat_created", "chat_id", "created_at"),)
 
     chat_id: Mapped[str] = mapped_column(ForeignKey("chats.id", ondelete="CASCADE"), index=True)
     sender_id: Mapped[str] = mapped_column(String(32))  # user id or 'agent'

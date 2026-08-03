@@ -41,9 +41,8 @@ from backend.ai.app import router as ai_router
 async def lifespan(app: FastAPI):
     # Fail fast rather than serving traffic with a forgeable JWT signing key.
     settings.assert_production_safe()
-    if settings.ENV == "local" and settings.is_sqlite:
-        from backend.shared.db import create_all
-        await create_all()
+    from backend.shared.db import ensure_schema
+    await ensure_schema()
     ensure_buckets()
     # Monolith mode: include-router doesn't run sub-app lifespans, so wire the
     # event-driven agent pipeline (listing.created -> intake -> verify -> score)

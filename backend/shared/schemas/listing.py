@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 # These mirror frontend `Product` / `SpecSection` (mockData.ts) EXACTLY so the
@@ -102,7 +104,10 @@ class IntakeIn(BaseModel):
 
 
 class AnalyticsEventIn(BaseModel):
-    event_type: str  # "view" | "launch"
+    # Constrained to the events the product actually records. This endpoint is
+    # public and unauthenticated, so an open `str` let anyone write arbitrary
+    # rows into analytic_events indefinitely.
+    event_type: Literal["view", "launch"]
     listing_id: str | None = None
     slug: str | None = None
 

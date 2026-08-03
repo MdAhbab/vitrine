@@ -7,6 +7,7 @@ shapes for the next AI to implement. See backend.md step-by-step Phase 2.
 """
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status, R
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.shared.cache import cache
 from backend.shared.db import get_session
 from backend.shared.events import bus
 from backend.shared.ids import slugify
@@ -22,12 +24,18 @@ from backend.shared.plans import listing_limit
 
 # Listing statuses that count against a seller's active-listing quota.
 _ACTIVE_LISTING_STATUSES = ("draft", "enriching", "review", "live", "flagged", "paused")
+# Rows scanned when filtering by tag (a JSON column, so not SQL-filterable on
+# the portable path). Bounds the scan while covering the whole live catalog at
+# boutique scale; a GIN index on listing tags is the Postgres-era fix.
+_TAG_SCAN_CAP = 1000
 from backend.shared.schemas.listing import IntakeIn, ListingCreateIn, ProductOut, AnalyticsEventIn, SellerAnalyticsOut, AdminAnalyticsOut
 from backend.shared.security import Principal, current_user, require_role, optional_user, ai_rate_limit
 from backend.shared.timeutil import is_past
 
 
 from .serializers import to_product
+
+log = logging.getLogger("vitrine.catalog")
 
 router = APIRouter(tags=["catalog"])
 
@@ -98,8 +106,30 @@ async def cleanup_expired_listings(db: AsyncSession) -> None:
         stmt = delete(Listing).where(Listing.expires_at < now, Listing.updated_at < three_months_ago)
         await db.execute(stmt)
         await db.commit()
-    except Exception as e:
-        print("Error cleaning up expired listings:", e)
+    except Exception:
+        # Roll back before returning: the caller keeps using this session to
+        # serve the response, and a failed statement leaves it unusable.
+        await db.rollback()
+        log.exception("expired-listing cleanup failed")
+
+
+# Repeat views of the same listing by the same viewer inside this window are
+# not recorded. A product page is refreshed and re-opened constantly, and each
+# hit was an INSERT+COMMIT on the busiest anonymous read path in the app.
+_VIEW_DEDUPE_S = 900
+
+
+async def _record_view(db: AsyncSession, listing_id: str, actor_id: str | None) -> None:
+    key = f"view:{listing_id}:{actor_id or 'anon'}"
+    try:
+        if await cache.get(key):
+            return
+        db.add(AnalyticEvent(listing_id=listing_id, event_type="view", actor_id=actor_id))
+        await db.commit()
+        await cache.set(key, True, ttl=_VIEW_DEDUPE_S)
+    except Exception:
+        await db.rollback()
+        log.exception("could not record listing view")
 
 
 @router.get("/listings", response_model=list[ProductOut])
@@ -132,12 +162,20 @@ async def list_listings(
     if q:
         stmt = stmt.where(Listing.name.ilike(f"%{q}%"))
     order = Listing.vitrine_score.desc() if sort == "vitrine_score" else Listing.created_at.desc()
-    stmt = stmt.order_by(order).limit(limit).offset(offset)
-    rows = list((await db.execute(stmt)).scalars().all())
-    out = await _load_many(db, rows)
-    if tag:  # simple post-filter on JSON tags (pgvector/GIN later)
-        out = [p for p in out if tag in p.tags]
-    return out
+    stmt = stmt.order_by(order)
+
+    if tag:
+        # Tags live in a JSON column, so this filter cannot run in SQL on the
+        # portable path. Paginating BEFORE it meant a tag-filtered page returned
+        # fewer rows than `limit` while matches still existed further down, and
+        # advancing `offset` skipped matching rows entirely. Filter first over a
+        # bounded window, then slice.
+        rows = list((await db.execute(stmt.limit(_TAG_SCAN_CAP))).scalars().all())
+        rows = [r for r in rows if tag in (r.tags or [])][offset:offset + limit]
+    else:
+        rows = list((await db.execute(stmt.limit(limit).offset(offset))).scalars().all())
+
+    return await _load_many(db, rows)
 
 
 @router.get("/listings/{slug}", response_model=ProductOut)
@@ -155,17 +193,7 @@ async def get_listing(slug: str, db: AsyncSession = Depends(get_session),
         if not is_owner and not is_admin:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
 
-    try:
-        event = AnalyticEvent(
-            listing_id=listing.id,
-            event_type="view",
-            actor_id=user.id if user else None
-        )
-        db.add(event)
-        await db.commit()
-    except Exception:
-        pass
-
+    await _record_view(db, listing.id, user.id if user else None)
     return await _load(db, listing)
 
 

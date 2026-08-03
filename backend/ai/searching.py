@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.ai.client import client
 from backend.ai.vectorstore import vector_store
+from backend.shared.cache import cache, content_hash
 from backend.shared.models import Listing
 
 
@@ -40,6 +41,26 @@ CATEGORY_TERMS = {
     "healthcare": "Healthcare",
     "telehealth": "Healthcare",
 }
+
+
+# Upper bound on rows pulled into Python for re-ranking. Generous enough that
+# the boutique catalog is fully covered, small enough that growth can't turn a
+# search into a full-table materialisation.
+_CANDIDATE_POOL = 500
+
+# Query embeddings are cached by content hash: buyers retype and refine the same
+# phrases constantly, and every repeat used to buy a fresh embedding call.
+_QUERY_EMBED_TTL_S = 3600
+
+
+async def _embed_query(query: str) -> list[float]:
+    key = f"qembed:{content_hash(query.strip().lower())}"
+    if cached := await cache.get(key):
+        return cached
+    vec = await client.embed(query)
+    if vec:
+        await cache.set(key, vec, ttl=_QUERY_EMBED_TTL_S)
+    return vec
 
 
 @dataclass(frozen=True)
@@ -154,6 +175,12 @@ async def search_listings(
     if effective_has_demo is not None:
         stmt = stmt.where(Listing.demo_url.isnot(None) if effective_has_demo else Listing.demo_url.is_(None))
 
+    # Re-ranking happens in Python, so the candidate pool has to be bounded or
+    # every search materialises the whole live catalog. Ordering by Vitrine
+    # Score first means the cap trims the least promising rows, not arbitrary
+    # ones — and _CANDIDATE_POOL is far above any page size the UI requests.
+    stmt = stmt.order_by(Listing.vitrine_score.desc()).limit(_CANDIDATE_POOL)
+
     rows = list((await db.execute(stmt)).scalars().all())
     if not rows:
         return []
@@ -161,7 +188,7 @@ async def search_listings(
     vector_scores: dict[str, float] = {}
     if query.strip() and use_ai:
         try:
-            query_vec = await client.embed(query)
+            query_vec = await _embed_query(query)
             vector_scores = dict(await vector_store.search(db, query_vec, k=100))
         except Exception:
             vector_scores = {}
