@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Github, ArrowRight, Check, Sparkles, Upload, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -30,6 +30,8 @@ export function Sell({ onDone }: { onDone: () => void }) {
   const [submitting, setSubmitting] = useState(false);
   const [screenshots, setScreenshots] = useState<string[]>([]);
   const [readmeFile, setReadmeFile] = useState<string | null>(null);
+  const [tiers, setTiers] = useState<{ name: string; price: number; note?: string; rec?: boolean }[] | null>(null);
+  const [pricingLoading, setPricingLoading] = useState(false);
 
   useEffect(() => {
     if (!analyzing || !USE_MOCKS) return;
@@ -82,6 +84,37 @@ export function Sell({ onDone }: { onDone: () => void }) {
       setAnalyzing(false);
     }
   };
+
+  // The step-4 copy credits the Pricing & Pitch Agent, so actually ask it. The
+  // tiers used to be a hardcoded price/+80/+280 ladder that never called the
+  // backend — the very "flat +$80" shape the agent exists to avoid.
+  const loadPricing = useCallback(async () => {
+    if (USE_MOCKS || !listingId || tiers || pricingLoading) return;
+    setPricingLoading(true);
+    try {
+      const res = await api.pricing(listingId);
+      const suggested = (res?.suggested_tiers ?? []).filter((t: any) => t && t.name != null);
+      if (suggested.length) {
+        setTiers(suggested.map((t: any) => ({
+          name: String(t.name),
+          price: Math.round(Number(t.price) || 0),
+          note: Array.isArray(t.features) ? t.features[0] : undefined,
+          rec: Boolean(t.recommended),
+        })));
+        if (res.tagline && !tagline) setTagline(String(res.tagline));
+        if (suggested[0]?.price) setPrice(Math.round(Number(suggested[0].price)));
+      }
+    } catch {
+      // Leave `tiers` null — the UI then shows the seller's own price only,
+      // rather than inventing a ladder and crediting it to the agent.
+    } finally {
+      setPricingLoading(false);
+    }
+  }, [listingId, tiers, pricingLoading, tagline]);
+
+  useEffect(() => {
+    if (step === 3) void loadPricing();
+  }, [step, loadPricing]);
 
   const handleSubmit = async () => {
     if (USE_MOCKS) {
@@ -251,13 +284,17 @@ export function Sell({ onDone }: { onDone: () => void }) {
             {step === 3 && (
               <div className="space-y-6 max-w-2xl">
                 <h2 className="font-serif text-2xl">Step 4 · Price & pitch</h2>
-                <p className="text-text-muted text-sm flex items-center gap-1.5"><Sparkles size={13} className="text-accent" /> Pricing & Pitch Agent suggested these tiers based on comparable pieces.</p>
+                <p className="text-text-muted text-sm flex items-center gap-1.5">
+                  {pricingLoading ? (
+                    <><Loader2 size={13} className="animate-spin text-accent" /> Asking the Pricing &amp; Pitch Agent for comparable tiers…</>
+                  ) : tiers ? (
+                    <><Sparkles size={13} className="text-accent" /> Pricing &amp; Pitch Agent suggested these tiers based on comparable pieces.</>
+                  ) : (
+                    <>Set your price below. Tier suggestions are unavailable right now.</>
+                  )}
+                </p>
                 <div className="grid sm:grid-cols-3 gap-3">
-                  {[
-                    { name: 'Source', price: price, note: 'Just the code' },
-                    { name: 'Source + Setup', price: price + 80, note: 'Recommended', rec: true },
-                    { name: 'Bespoke', price: price + 280, note: 'White-glove' },
-                  ].map((t) => (
+                  {(tiers ?? [{ name: 'Source', price: price, note: 'Just the code' }]).map((t) => (
                     <div key={t.name} className={`hairline rounded-xl p-4 ${t.rec ? 'border-accent bg-surface-2/40' : ''}`}>
                       <div className="font-serif text-lg">{t.name}</div>
                       <div className="font-mono text-2xl tabular mt-2">${t.price}</div>

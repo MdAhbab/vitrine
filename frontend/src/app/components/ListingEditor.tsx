@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Bot, Sparkles, Trash2, Save, Loader2, Plus } from 'lucide-react';
-import { mediaUrl } from '../lib/api';
+import { toast } from 'sonner';
+import { api, mediaUrl, USE_MOCKS } from '../lib/api';
 import { useStore, type Listing } from '../lib/store';
 import { MediaPicker, MediaPickerMulti } from './MediaPicker';
 import { Typewriter } from './Typewriter';
@@ -23,27 +24,44 @@ export function ListingEditor({
   const updateSdlc = (k: keyof Listing['sdlc'], v: string) => setDraft((d) => ({ ...d, sdlc: { ...d.sdlc, [k]: v } }));
   const updateBusiness = (k: keyof Listing['businessModel'], v: any) => setDraft((d) => ({ ...d, businessModel: { ...d.businessModel, [k]: v } }));
 
+  // Ask the real Pricing & Pitch agent for the copy. This used to be a 900ms
+  // fake delay followed by hardcoded string templates and an invented tech
+  // stack, all under a banner reading "filled by our AI" — the button never
+  // touched the network.
   const aiRedraft = async () => {
+    if (USE_MOCKS) return;
+    if (!draft.name?.trim()) {
+      toast.error('Give the piece a name first — the agent drafts from it.');
+      return;
+    }
     setDrafting(true);
-    await new Promise((r) => setTimeout(r, 900));
-    setDraft((d) => ({
-      ...d,
-      tagline: d.tagline || `${d.name} — a considered ${d.category.toLowerCase()} surface.`,
-      sdlc: {
-        problem: d.sdlc.problem || `Teams in ${d.category.toLowerCase()} stitch together fragmented tools — ${d.name} replaces them with one cohesive surface.`,
-        solution: d.sdlc.solution || `A focused codebase delivering the 80% of ${d.category.toLowerCase()} workflow that matters, with clean seams for the rest.`,
-        methodology: d.sdlc.methodology || `Built iteratively in two-week cycles, validated against six pilot users. Every component has a single named responsibility.`,
-        discussions: d.sdlc.discussions || `Open questions: managed-hosting variant? Threading vs. tabs? Community PRs welcome.`,
-      },
-      businessModel: {
-        ...d.businessModel,
-        pitch: d.businessModel.pitch || `Commercial codebase — rebrand, deploy, bill against. Your margin, your customers.`,
-        revenueStreams: d.businessModel.revenueStreams.length ? d.businessModel.revenueStreams : ['Source license sales', 'Bespoke commissions', 'Support retainers'],
-      },
-      techStack: d.techStack.length ? d.techStack : [d.framework, 'TypeScript', 'Tailwind CSS', 'PostgreSQL', 'TanStack Query', 'Vite'],
-      aiDraft: true,
-    }));
-    setDrafting(false);
+    try {
+      // Persist the basics so the agent reasons over what the seller actually typed.
+      await api.updateListing(draft.id, {
+        name: draft.name, category: draft.category,
+        framework: draft.framework, price: draft.price,
+      });
+      const res = await api.pricing(draft.id);
+      if (res?.stub) {
+        toast.error('The drafting agent is unavailable right now. Try again shortly.');
+        return;
+      }
+      setDraft((d) => ({
+        ...d,
+        tagline: d.tagline || res.tagline || d.tagline,
+        description: d.description || res.long_description || res.short_description || d.description,
+        businessModel: {
+          ...d.businessModel,
+          pitch: d.businessModel.pitch || res.short_description || '',
+        },
+        aiDraft: true,
+      }));
+      toast.success('Draft updated by the Pricing & Pitch agent');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Drafting failed');
+    } finally {
+      setDrafting(false);
+    }
   };
 
   const save = () => { upsertListing({ ...draft, aiDraft: false }); setMode('view'); };
