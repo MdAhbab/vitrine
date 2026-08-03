@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     AGENT_MAX_RETRIES: int = 2
     AGENT_RUN_BUDGET_TOKENS: int = 20000
 
+    # gemini (fallback provider) ------------------------------------------
+    # Used automatically when OpenAI fails/quota-limits. Each Gemini model
+    # carries its own quota, so the client walks GEMINI_MODELS in order.
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODELS: str = (
+        "gemini-2.5-flash,gemini-2.5-flash-lite,gemini-3-flash-preview,"
+        "gemini-3.1-flash-lite,gemini-3.5-flash,gemini-3.5-flash-lite,"
+        "gemini-2.5-pro,gemini-3-pro-preview,gemini-3.1-pro-preview"
+    )
+    GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
+
     # commerce -----------------------------------------------------------
     PAYMENT_PROVIDER: str = "mock"      # mock | stripe
     STRIPE_SECRET_KEY: str = ""
@@ -73,6 +84,10 @@ class Settings(BaseSettings):
     @property
     def allowed_preview_hosts(self) -> list[str]:
         return [h.strip() for h in self.ALLOWED_PREVIEW_HOSTS.split(",") if h.strip()]
+
+    @property
+    def gemini_models(self) -> list[str]:
+        return [m.strip() for m in self.GEMINI_MODELS.split(",") if m.strip()]
 
     @property
     def academic_email_suffixes(self) -> list[str]:

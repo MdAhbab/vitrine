@@ -1,10 +1,17 @@
 """
-OpenAI client wrapper — the ONLY place that talks to OpenAI.
+LLM client wrapper — the ONLY place that talks to a model provider.
 
-Centralizes: model selection, retries/timeouts, token counting, cost accounting
-(writes agent_runs), and result caching. Designed to be SAFE WITHOUT A KEY: if
-OPENAI_API_KEY is empty it returns deterministic stub output so the whole app
-runs offline during development. Flip the key on to go live.
+Centralizes: provider fallback, model selection, retries/timeouts, token
+counting, cost accounting (writes agent_runs), and result caching. Designed to
+be SAFE WITHOUT A KEY: if no provider is configured it returns deterministic
+stub output so the whole app runs offline during development.
+
+Provider order (first that answers wins):
+  1. OpenAI      — settings.OPENAI_API_KEY, model settings.OPENAI_MODEL
+  2. Gemini      — settings.GEMINI_API_KEY, walking settings.GEMINI_MODELS in
+                   order. Each Gemini model has its own quota, so a 429 on one
+                   model moves to the next rather than giving up on Gemini.
+  3. Admin-configured keys from the admin_configs `api_keys` row.
 
 Pricing (gpt-4o-mini, approx): $0.15 / 1M input, $0.60 / 1M output.
 """
@@ -20,12 +27,33 @@ from backend.shared.settings import settings
 # picking up admin key rotations within a few seconds.
 _CONFIG_TTL_S = 20.0
 
+# Width of every stored listing embedding. Cosine similarity zips the query and
+# stored vectors, so all providers must agree on this number.
+EMBED_DIM = 1536
+
+# Base URLs for OpenAI-compatible providers.
+PROVIDER_BASE_URLS = {
+    "grok": "https://api.x.ai/v1",
+    "nvidia": "https://integrate.api.nvidia.com/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
+}
+
 _PRICE = {  # USD per 1M tokens (input, output)
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4.1-nano": (0.10, 0.40),
     "gpt-5-mini": (0.25, 2.00),
     "gpt-5-nano": (0.05, 0.40),
+    # gemini fallbacks
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-3-flash-preview": (0.30, 2.50),
+    "gemini-3.1-flash-lite": (0.10, 0.40),
+    "gemini-3.5-flash": (0.30, 2.50),
+    "gemini-3.5-flash-lite": (0.10, 0.40),
+    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-3-pro-preview": (2.00, 12.00),
+    "gemini-3.1-pro-preview": (2.00, 12.00),
 }
 
 
@@ -41,6 +69,7 @@ class LLMResult:
     tokens_in: int = 0
     tokens_out: int = 0
     model: str = ""
+    provider: str = ""
     stub: bool = False
 
     @property
@@ -54,26 +83,33 @@ class AIClient:
         self._cached_hash: int | None = None
         self._configured_at: float = 0.0     # monotonic ts of last DB read
         self._ever_configured: bool = False
-        self._default_client = None          # env-key OpenAI client (built once)
+        self._env_clients: list | None = None  # env-key clients (built once)
 
-    def _default(self):
-        """The settings.OPENAI_API_KEY client, constructed once and reused."""
-        if settings.OPENAI_API_KEY and self._default_client is None:
+    def _default(self) -> list[tuple]:
+        """Env-key clients in fallback order: OpenAI first, then Gemini.
+
+        Built once and reused. Returns [] when neither key is set, which is what
+        drives the offline stub path.
+        """
+        if self._env_clients is None:
             from openai import AsyncOpenAI
-            self._default_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        return self._default_client
+            built: list[tuple] = []
+            if settings.OPENAI_API_KEY:
+                built.append((AsyncOpenAI(api_key=settings.OPENAI_API_KEY), "openai"))
+            if settings.GEMINI_API_KEY:
+                built.append((AsyncOpenAI(api_key=settings.GEMINI_API_KEY,
+                                          base_url=PROVIDER_BASE_URLS["gemini"]), "gemini"))
+            self._env_clients = built
+        return self._env_clients
 
     async def _resolved_clients(self) -> list[tuple]:
-        """(client, provider) list = env-default first, then admin-configured.
+        """(client, provider) list = env-defaults first, then admin-configured.
 
         Returns a NEW list each call so callers can prepend without mutating the
         cached admin-client list (the previous code leaked a fresh client into
         the cache on every call). The DB is only read once per _CONFIG_TTL_S.
         """
-        clients: list[tuple] = []
-        default = self._default()
-        if default is not None:
-            clients.append((default, "openai"))
+        clients: list[tuple] = list(self._default())
         clients.extend(await self._get_configured_clients())
         return clients
 
@@ -97,11 +133,7 @@ class AIClient:
                     return self._clients
 
                 from openai import AsyncOpenAI
-                _bases = {
-                    "grok": "https://api.x.ai/v1",
-                    "nvidia": "https://integrate.api.nvidia.com/v1",
-                    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
-                }
+                _bases = PROVIDER_BASE_URLS
                 clients = []
                 for k in active:
                     provider = k.get("provider")
@@ -131,34 +163,40 @@ class AIClient:
             return self._stub(messages, model or settings.OPENAI_MODEL)
 
         last_exc: Exception | None = None
-        
+
         for client, provider in clients:
             # Map standard OpenAI models to provider-specific models if needed
             candidates = self._get_provider_models(provider, model)
-            
+
             for candidate in candidates:
                 kwargs: dict = {"model": candidate, "messages": messages, "tools": tools or None}
                 if json_mode and not tools:
-                    # Not all providers support json_object, but we try
-                    if provider in ("openai", "grok"):
+                    # Gemini's OpenAI-compat endpoint honours json_object too.
+                    if provider in ("openai", "grok", "gemini"):
                         kwargs["response_format"] = {"type": "json_object"}
                 try:
                     resp = await client.chat.completions.create(**kwargs)
                     choice = resp.choices[0].message
                     usage = resp.usage
+                    if last_exc is not None:
+                        print(f"[ai] fell back to {provider}/{candidate} after: {last_exc}")
                     return LLMResult(
                         text=choice.content or "",
                         tool_calls=[tc.model_dump() for tc in (choice.tool_calls or [])],
                         tokens_in=getattr(usage, "prompt_tokens", 0),
                         tokens_out=getattr(usage, "completion_tokens", 0),
                         model=candidate,
+                        provider=provider,
                     )
                 except Exception as exc:
                     last_exc = exc
                     continue # Try next model or next provider
-                    
-        assert last_exc is not None
-        raise last_exc
+
+        # Every provider/model failed. Degrade to the offline stub instead of
+        # 500-ing the caller: agents already know how to handle stub output, and
+        # a transient upstream outage should not take the whole app down.
+        print(f"[ai] all providers failed ({last_exc}); serving stub")
+        return self._stub(messages, model or settings.OPENAI_MODEL)
 
     def _get_provider_models(self, provider: str, requested: str | None) -> list[str]:
         if provider == "openai":
@@ -168,24 +206,36 @@ class AIClient:
         elif provider == "nvidia":
             return ["meta/llama-3.1-70b-instruct", "nvidia/nemotron-4-340b-instruct"]
         elif provider == "gemini":
-            return ["gemini-1.5-flash", "gemini-1.5-pro"]
+            # Each model carries its own quota — walk the configured priority
+            # list so a 429 on one model rolls to the next instead of failing.
+            return settings.gemini_models
         return [requested or settings.OPENAI_MODEL]
 
     async def embed(self, text: str, *, model: str | None = None) -> list[float]:
-        model = model or settings.OPENAI_EMBED_MODEL
         clients = await self._resolved_clients()
 
-        # For embeddings, we prefer OpenAI since vector stores expect 1536 dim
-        # but let's try the first available client that is OpenAI compatible for embeddings
+        # Stored vectors are 1536-dim and cosine similarity zips the two lists,
+        # so a provider returning a different width would silently score
+        # garbage. Pin every provider to EMBED_DIM and drop any reply that
+        # isn't that width.
         for client, provider in clients:
-            if provider in ("openai", "gemini"): 
-                embed_model = "text-embedding-3-small" if provider == "openai" else "text-embedding-004"
-                try:
-                    resp = await client.embeddings.create(model=embed_model, input=text)
-                    return resp.data[0].embedding
-                except Exception:
+            if provider not in ("openai", "gemini"):
+                continue
+            if provider == "openai":
+                embed_model = model or settings.OPENAI_EMBED_MODEL
+                kwargs = {"model": embed_model, "input": text, "dimensions": EMBED_DIM}
+            else:
+                embed_model = settings.GEMINI_EMBED_MODEL
+                kwargs = {"model": embed_model, "input": text, "dimensions": EMBED_DIM}
+            try:
+                resp = await client.embeddings.create(**kwargs)
+                vec = resp.data[0].embedding
+                if len(vec) != EMBED_DIM:
                     continue
-                    
+                return vec
+            except Exception:
+                continue
+
         return _stub_embedding(text)
 
     @staticmethod
@@ -197,7 +247,7 @@ class AIClient:
         )
 
 
-def _stub_embedding(text: str, dim: int = 1536) -> list[float]:
+def _stub_embedding(text: str, dim: int = EMBED_DIM) -> list[float]:
     """Deterministic pseudo-embedding so semantic search 'works' offline."""
     import hashlib
     import math
