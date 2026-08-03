@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import platform
+import secrets
 import subprocess
 import sys
 import textwrap
@@ -184,6 +185,15 @@ def sync_checkout() -> None:
     ok("Checkout synced.")
 
 
+# Values shipped in .env.example / settings.py defaults — never usable in prod.
+_PLACEHOLDER_SECRETS = {
+    "",
+    "change-me",
+    "change-me-to-a-long-random-string",
+    "dev-only-change-me",
+}
+
+
 def _read_env(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -234,6 +244,16 @@ def ensure_cloud_env(domain: str) -> None:
         "CACHE": "memory",
         "FILES_ROOT": "files",
     }
+
+    # SECRET_KEY signs every JWT and derives the key-vault encryption key. The
+    # env file is seeded from .env/.env.example, which carry placeholders, so
+    # mint a real one on first deploy. Never regenerate an existing key: that
+    # would invalidate live sessions and make stored API keys undecryptable.
+    existing_secret = _read_env(env_path).get("SECRET_KEY", "")
+    if existing_secret in _PLACEHOLDER_SECRETS or len(existing_secret) < 32:
+        required["SECRET_KEY"] = secrets.token_urlsafe(48)
+        info("Generated a fresh SECRET_KEY for this deployment.")
+
     write_env_values(env_path, required)
     ok(f"Cloud env ready for https://{domain}.")
 

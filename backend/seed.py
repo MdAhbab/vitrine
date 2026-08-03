@@ -37,6 +37,7 @@ from backend.shared.models import (
     AnalyticEvent,
     Order,
 )
+from backend.shared.plans import split_sale
 from backend.shared.security import hash_password
 from backend.ai.client import client
 
@@ -499,18 +500,14 @@ async def seed() -> None:
         ]
         
         for buyer, listing, price_dollars in orders_to_create:
-            gross = price_dollars * 100
-            rate = 0.12 # default
+            # Reuse the live checkout economics rather than re-deriving the rate
+            # table here — a fourth copy of it is exactly how the seeded ledger
+            # drifted from what checkout actually charges (see shared/plans.py).
             seller_user = next((s for s in sellers.values() if s.id == listing.owner_id), None)
-            if seller_user:
-                if seller_user.plan == "studio":
-                    rate = 0.08
-                elif seller_user.plan == "atelier":
-                    rate = 0.05
-                elif seller_user.plan == "maison":
-                    rate = 0.03
-            commission = int(gross * rate)
-            
+            plan = seller_user.plan if seller_user else "free"
+            is_student = bool(seller_user and seller_user.is_student and plan == "free")
+            gross, commission, _net = split_sale(price_dollars * 100, plan, is_student)
+
             db.add(Order(
                 buyer_id=buyer.id,
                 listing_id=listing.id,

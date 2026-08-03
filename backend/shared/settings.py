@@ -13,12 +13,16 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Sentinel default. `assert_production_safe()` refuses to boot ENV=prod with it.
+DEFAULT_SECRET_KEY = "dev-only-change-me"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # core ---------------------------------------------------------------
     ENV: str = "local"
-    SECRET_KEY: str = "dev-only-change-me"
+    SECRET_KEY: str = DEFAULT_SECRET_KEY
     # DEFAULT = SQLite (now). Postgres later:
     #   postgresql+asyncpg://vitrine:vitrine@localhost:5432/vitrine
     DATABASE_URL: str = "sqlite+aiosqlite:///./vitrine.db"
@@ -80,6 +84,31 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")
+
+    @property
+    def is_prod(self) -> bool:
+        return self.ENV.lower() in ("prod", "production")
+
+    def assert_production_safe(self) -> None:
+        """Refuse to boot a production server with dev-grade secrets.
+
+        SECRET_KEY signs every JWT *and* derives the Fernet key that encrypts
+        stored third-party API keys (see shared/crypto.py). Shipping the default
+        means anyone can mint an admin token and decrypt the key vault, so this
+        is a hard failure rather than a warning.
+        """
+        if not self.is_prod:
+            return
+        problems: list[str] = []
+        if self.SECRET_KEY == DEFAULT_SECRET_KEY or len(self.SECRET_KEY) < 32:
+            problems.append(
+                "SECRET_KEY is unset, default, or shorter than 32 chars — "
+                "generate one with: python -c \"import secrets;print(secrets.token_urlsafe(48))\""
+            )
+        if problems:
+            raise RuntimeError(
+                "Refusing to start in ENV=prod:\n  - " + "\n  - ".join(problems)
+            )
 
     @property
     def allowed_preview_hosts(self) -> list[str]:

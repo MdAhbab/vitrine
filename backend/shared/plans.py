@@ -23,7 +23,7 @@ PROCESSING_PCT = 2.0
 
 
 def commission_cents(amount_cents: int, plan: str, is_student: bool) -> int:
-    """Platform cut for a sale, honouring plan tier + student discount."""
+    """Plan commission on the list price, honouring tier + student discount."""
     pct = COMMISSION_PCT.get(plan, COMMISSION_PCT["free"])
     if plan == "free" and is_student:
         pct = STUDENT_FREE_PCT
@@ -33,6 +33,23 @@ def commission_cents(amount_cents: int, plan: str, is_student: bool) -> int:
 def buyer_cents(base_cents: int) -> int:
     """What the buyer pays including the processing markup."""
     return round(base_cents * (1 + PROCESSING_PCT / 100))
+
+
+def split_sale(base_cents: int, plan: str, is_student: bool) -> tuple[int, int, int]:
+    """Return `(buyer_pays, platform_take, seller_net)` for a sale.
+
+    The single source of truth for sale economics. Every consumer derives the
+    seller's net as `order.amount_cents - order.commission_cents`, so the
+    platform's recorded take MUST also absorb the buyer-side processing markup —
+    otherwise that markup silently lands in the seller's payout balance and the
+    platform never captures it. Concretely, for a $100 sale on the free plan the
+    buyer pays $102, the platform keeps $12 commission + $2 processing, and the
+    seller nets exactly $88.
+    """
+    buyer = buyer_cents(base_cents)
+    commission = commission_cents(base_cents, plan, is_student)
+    platform_take = commission + (buyer - base_cents)
+    return buyer, platform_take, buyer - platform_take
 
 
 def listing_limit(plan: str) -> int:

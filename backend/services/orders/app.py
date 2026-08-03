@@ -19,8 +19,10 @@ from backend.shared.models import Listing, ListingTier, Order, User, Payout, Sub
 from backend.shared.schemas.commerce import CheckoutIn, OrderOut, DeliverIn, PayoutRequestIn, SubscribeIn
 from backend.shared.security import Principal, current_user, require_role
 
+from backend.shared.timeutil import is_past
+
 from .providers import get_provider
-from backend.shared.plans import commission_cents as _commission_cents, buyer_cents as _buyer_cents, listing_limit
+from backend.shared.plans import listing_limit, split_sale
 
 router = APIRouter(tags=["orders"])
 
@@ -45,6 +47,15 @@ async def checkout(body: CheckoutIn, user: Principal = Depends(current_user),
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
     if listing.owner_id == user.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot purchase your own listing")
+    # Only a live, unexpired listing is purchasable. Without this a buyer could
+    # pay for a draft, a listing still under moderation (`review`/`flagged`), or
+    # one the seller already archived — each creating a real delivery obligation
+    # for something never approved for sale.
+    if listing.status != "live" or is_past(listing.expires_at):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This listing is not currently available for purchase",
+        )
     seller = await db.get(User, listing.owner_id)
     buyer = await db.get(User, user.id)
 
@@ -58,8 +69,7 @@ async def checkout(body: CheckoutIn, user: Principal = Depends(current_user),
 
     # Buyer pays the processing markup; the platform cut honours the SELLER's
     # plan tier + student status (previously hardcoded to 12% — see plans.py).
-    buyer_cents = _buyer_cents(base_cents)
-    commission_cents = _commission_cents(
+    buyer_cents, platform_take_cents, _seller_net = split_sale(
         base_cents, seller.plan, bool(seller.is_student and seller.plan == "free")
     )
 
@@ -69,7 +79,7 @@ async def checkout(body: CheckoutIn, user: Principal = Depends(current_user),
     order = Order(
         buyer_id=buyer.id, listing_id=listing.id, seller_id=seller.id,
         tier_id=tier_id, tier_name=tier_name, amount_cents=buyer_cents,
-        commission_cents=commission_cents,
+        commission_cents=platform_take_cents,
         kind=body.kind, status=session.status, provider=provider.__class__.__name__,
         provider_ref=session.provider_ref,
     )

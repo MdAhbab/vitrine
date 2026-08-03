@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -39,6 +39,8 @@ from backend.ai.app import router as ai_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail fast rather than serving traffic with a forgeable JWT signing key.
+    settings.assert_production_safe()
     if settings.ENV == "local" and settings.is_sqlite:
         from backend.shared.db import create_all
         await create_all()
@@ -100,8 +102,19 @@ if frontend_dist.exists():
     frontend_root = frontend_dist.resolve()
     index_html = frontend_root / "index.html"
 
+    # Top-level segments owned by the API. Without this, the SPA fallback below
+    # answers a typo'd/removed endpoint with `200 text/html`, so API clients
+    # parse the index page instead of seeing a 404.
+    _API_PREFIXES = {
+        route.path.lstrip("/").split("/", 1)[0]
+        for route in app.routes
+        if getattr(route, "path", "").startswith("/")
+    } - {"", "{full_path:path}"}
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_frontend(full_path: str):
+        if full_path.split("/", 1)[0] in _API_PREFIXES:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
         candidate = (frontend_root / full_path).resolve()
         if candidate.is_file() and (candidate == frontend_root or frontend_root in candidate.parents):
             return FileResponse(candidate)
