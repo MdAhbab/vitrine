@@ -1,9 +1,14 @@
 """Repo-Intake Agent — repo/README -> filled form sheet. See AGENTS.md §1."""
 from __future__ import annotations
 
+import logging
+
+from backend.shared.cache import content_hash
 from backend.shared.form_schema import ai_fillable_keys
 
 from .base import run_agent, system_prompt_for
+
+_log = logging.getLogger("vitrine.agents.repo_intake")
 
 SYSTEM = system_prompt_for("Repo-Intake Agent",
                            "Fill the listing technical form from the repo/README.")
@@ -49,14 +54,26 @@ async def run(listing_id: str, repo_url: str | None = None,
             select(ListingField).where(ListingField.listing_id == listing_id)
         )).scalars().all())
         if listing:
-            text_to_embed = f"{listing.name} {listing.tagline} {listing.description}"
-            from backend.ai.tools import embed_text
-            try:
-                emb_res = await embed_text(text_to_embed)
-                if "embedding" in emb_res:
-                    await vector_store.upsert(db, listing_id, emb_res["embedding"])
-            except Exception:
-                pass
+            # AGENTS.md §1.4 embeds name + tagline + description + TAGS; tags
+            # were being dropped, which cost tag-based semantic recall.
+            tags = " ".join(listing.tags or []) if isinstance(listing.tags, list) else ""
+            text_to_embed = " ".join(
+                p for p in (listing.name, listing.tagline, listing.description, tags) if p
+            ).strip()
+            # Skip the call entirely when the text is unchanged. Intake re-runs on
+            # listing.created / .updated / manual retries, and each one used to
+            # re-purchase an identical embedding — the `text_hash` column existed
+            # for exactly this and was never populated.
+            new_hash = content_hash(text_to_embed)
+            if text_to_embed and new_hash != await vector_store.current_hash(db, listing_id):
+                from backend.ai.tools import embed_text
+                try:
+                    emb_res = await embed_text(text_to_embed)
+                    if "embedding" in emb_res:
+                        await vector_store.upsert(db, listing_id, emb_res["embedding"],
+                                                  text_hash=new_hash)
+                except Exception:
+                    _log.exception("embedding failed for listing %s", listing_id)
 
     return {
         "listing_id": listing_id,

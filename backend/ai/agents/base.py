@@ -7,17 +7,36 @@ agent stubs can call the LLM safely. Phase 2 adds the full tool loop + retries.
 """
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
 from backend.shared.cache import cache, content_hash
 from backend.shared.db import SessionLocal
 from backend.shared.models import AgentRun
+from backend.shared.settings import settings
 
 from ..budget import BudgetExceeded, budget
 from ..client import LLMResult, client
 
+_log = logging.getLogger("vitrine.agents")
+
 _AGENTS_MD = Path(__file__).resolve().parents[3] / "AGENTS.md"
+
+
+async def _record_run(agent: str, listing_id: str | None, trigger: str, input_hash: str,
+                      model: str, tokens_in: int, tokens_out: int, cost: float,
+                      status: str) -> None:
+    """Persist one agent_runs row. Never raises — observability must not be able
+    to take down the run it is observing."""
+    try:
+        async with SessionLocal() as db:
+            db.add(AgentRun(agent=agent, listing_id=listing_id, trigger_event=trigger,
+                            input_hash=input_hash, model=model, tokens_in=tokens_in,
+                            tokens_out=tokens_out, cost_usd=cost, status=status))
+            await db.commit()
+    except Exception:
+        _log.exception("[agent:%s] could not record agent run", agent)
 
 
 _PROMPT_KEY_MAP = {
@@ -83,16 +102,16 @@ async def run_agent(agent: str, system: str, user_msg: str, *,
     try:
         budget.check()
     except BudgetExceeded:
+        # `stub=True` is the contract callers gate on — this text is a diagnostic
+        # for logs and must never reach a user-visible surface. See
+        # negotiator.next_message for the enforcement side.
         degraded = LLMResult(
             text="[Budget exceeded — heuristic-only mode. Needs human review.]",
             stub=True,
             model="budget-cap",
         )
-        async with SessionLocal() as db:
-            db.add(AgentRun(agent=agent, listing_id=listing_id, trigger_event=trigger,
-                            input_hash=key, model="budget-cap", tokens_in=0,
-                            tokens_out=0, cost_usd=0.0, status="degraded"))
-            await db.commit()
+        await _record_run(agent, listing_id, trigger, key, "budget-cap",
+                          0, 0, 0.0, "degraded")
         return degraded
 
     openai_tools = None
@@ -109,64 +128,81 @@ async def run_agent(agent: str, system: str, user_msg: str, *,
                 openai_tools.append(tname)
                 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user_msg}]
-    
+
     total_in = 0
     total_out = 0
     total_cost = 0.0
     final_text = ""
     is_stub = False
     model_used = ""
-    
-    for i in range(5):
-        result = await client.chat(messages, tools=openai_tools)
-        total_in += result.tokens_in
-        total_out += result.tokens_out
-        total_cost += result.cost_usd
-        is_stub = is_stub or result.stub
-        model_used = result.model
-        
-        if result.stub or not result.tool_calls:
-            final_text = result.text
-            break
-            
-        messages.append({
-            "role": "assistant",
-            "content": result.text or None,
-            "tool_calls": result.tool_calls
-        })
-        
-        from ..tools import invoke
-        import json
-        for tc in result.tool_calls:
-            tc_id = tc["id"]
-            tc_name = tc["function"]["name"]
-            tc_args = json.loads(tc["function"]["arguments"])
-            
-            try:
-                output = await invoke(tc_name, tc_args)
-            except Exception as e:
-                output = {"error": str(e)}
-                print(f"[agent:{agent}] tool {tc_name} failed: {e}")
+
+    # One turn per retry, plus the initial call. Previously a magic `range(5)`
+    # that ignored the only knob AGENTS.md §8 documents for this.
+    max_turns = 1 + max(1, settings.AGENT_MAX_RETRIES)
+
+    try:
+        for _turn in range(max_turns):
+            result = await client.chat(messages, tools=openai_tools)
+            total_in += result.tokens_in
+            total_out += result.tokens_out
+            total_cost += result.cost_usd
+            is_stub = is_stub or result.stub
+            model_used = result.model
+
+            if result.stub or not result.tool_calls:
+                final_text = result.text
+                break
 
             messages.append({
-                "role": "tool",
-                "tool_call_id": tc_id,
-                "name": tc_name,
-                "content": json.dumps(output)
+                "role": "assistant",
+                "content": result.text or None,
+                "tool_calls": result.tool_calls
             })
-    else:
-        # Loop exhausted while still calling tools -> force one final text answer
-        # (no tools) so callers never get an empty draft/summary.
-        if not is_stub:
-            final = await client.chat(messages, tools=None)
-            total_in += final.tokens_in
-            total_out += final.tokens_out
-            total_cost += final.cost_usd
-            final_text = final.text
-            model_used = final.model
+
+            from ..tools import invoke
+            import json
+            for tc in result.tool_calls:
+                tc_id = tc["id"]
+                tc_name = tc["function"]["name"]
+                # Argument parsing is INSIDE the guard: a model emitting slightly
+                # malformed JSON (common when truncated or on a fallback model)
+                # used to raise straight out of run_agent, past every degradation
+                # path, leaving the listing wedged mid-pipeline. Feed the error
+                # back as a tool result so the model can correct itself instead.
+                try:
+                    output = await invoke(tc_name, json.loads(tc["function"]["arguments"]))
+                except Exception as e:
+                    output = {"error": str(e)}
+                    _log.warning("[agent:%s] tool %s failed: %s", agent, tc_name, e)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "name": tc_name,
+                    "content": json.dumps(output)
+                })
+        else:
+            # Loop exhausted while still calling tools -> force one final text
+            # answer (no tools) so callers never get an empty draft/summary.
+            if not is_stub:
+                final = await client.chat(messages, tools=None)
+                total_in += final.tokens_in
+                total_out += final.tokens_out
+                total_cost += final.cost_usd
+                final_text = final.text
+                model_used = final.model
+    except Exception:
+        # Record the failed run rather than vanishing: an uncaught exception here
+        # produced no agent_runs row at all, so the admin cost meter could never
+        # show a crashed run as crashed.
+        _log.exception("[agent:%s] run failed", agent)
+        budget.record(total_cost)
+        await _record_run(agent, listing_id, trigger, key, model_used,
+                          total_in, total_out, total_cost, "error")
+        raise
 
     budget.record(total_cost)
-    
+
     final_result = LLMResult(
         text=final_text,
         tool_calls=[],
@@ -175,15 +211,15 @@ async def run_agent(agent: str, system: str, user_msg: str, *,
         model=model_used,
         stub=is_stub
     )
-    
-    async with SessionLocal() as db:
-        db.add(AgentRun(agent=agent, listing_id=listing_id, trigger_event=trigger,
-                        input_hash=key, model=model_used, tokens_in=total_in,
-                        tokens_out=total_out, cost_usd=total_cost,
-                        status="degraded" if is_stub else "ok"))
-        await db.commit()
 
-    await cache.set(key, final_result.__dict__, ttl=86400)
+    await _record_run(agent, listing_id, trigger, key, model_used,
+                      total_in, total_out, total_cost,
+                      "degraded" if is_stub else "ok")
+
+    # Never cache a degraded result: a single transient outage would otherwise
+    # pin the stub answer for this input for a full day.
+    if not is_stub:
+        await cache.set(key, final_result.__dict__, ttl=86400)
     return final_result
 
 
@@ -221,8 +257,6 @@ async def run_json(agent: str, system: str, user_msg: str, *,
     Returns (parsed_dict_or_None, is_stub). Used by agents that need coherent
     structured output (Pricing, Feature estimator) instead of a tool loop.
     """
-    from backend.shared.settings import settings
-
     system = await resolve_system_prompt(agent, system)
     try:
         budget.check()
@@ -233,18 +267,20 @@ async def run_json(agent: str, system: str, user_msg: str, *,
     parsed: dict | None = None
     result = None
     # Schema-reject -> retry, per AGENTS.md §0.1 (max AGENT_MAX_RETRIES).
-    for attempt in range(1 + max(0, settings.AGENT_MAX_RETRIES)):
+    for _attempt in range(1 + max(0, settings.AGENT_MAX_RETRIES)):
         result = await client.chat(messages, json_mode=True)
         budget.record(result.cost_usd)
-        async with SessionLocal() as db:
-            db.add(AgentRun(agent=agent, listing_id=listing_id, trigger_event=trigger,
-                            input_hash="", model=result.model, tokens_in=result.tokens_in,
-                            tokens_out=result.tokens_out, cost_usd=result.cost_usd,
-                            status="degraded" if result.stub else "ok"))
-            await db.commit()
+        if result.stub:
+            status = "degraded"
+        else:
+            parsed = parse_json(result.text)
+            # A response we could not parse is a failed attempt, not an "ok" one
+            # — logging it as ok made schema rejections invisible in the meter.
+            status = "ok" if parsed is not None else "error"
+        await _record_run(agent, listing_id, trigger, "", result.model,
+                          result.tokens_in, result.tokens_out, result.cost_usd, status)
         if result.stub:
             return None, True
-        parsed = parse_json(result.text)
         if parsed is not None:
             return parsed, False
         # Nudge the model once with its own invalid output before retrying.

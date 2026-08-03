@@ -23,6 +23,10 @@ _log = logging.getLogger("vitrine.eventbus")
 Handler = Callable[[dict], Awaitable[None]]
 STREAM = "vitrine:events"
 GROUP = "vitrine-workers"
+# Failed events land here for inspection/replay instead of vanishing.
+DEAD_LETTER_STREAM = "vitrine:events:dead"
+# Redeliveries tolerated before an event is dead-lettered (AGENTS.md §7).
+MAX_DELIVERIES = 3
 
 
 def make_event(type_: str, payload: dict, *, actor: str = "system",
@@ -65,6 +69,7 @@ class _RedisBus:
         self._redis = None
         self._consumer_task: asyncio.Task | None = None
         self._seen: set[str] = set()
+        self._deliveries: dict[str, int] = {}
 
     def subscribe(self, topic: str, handler: Handler) -> None:
         self._subs[topic].append(handler)
@@ -98,44 +103,102 @@ class _RedisBus:
             return
         self._consumer_task = asyncio.create_task(self._consume_loop())
 
+    async def _dead_letter(self, r, msg_id: str, payload: str, reason: str) -> None:
+        """Park a message that will never succeed, then ack it so the consumer
+        group can move on. Without this a poison event is retried forever."""
+        try:
+            await r.xadd(DEAD_LETTER_STREAM, {
+                "data": payload,
+                "reason": reason[:500],
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "original_id": msg_id,
+            })
+        except Exception:
+            _log.exception("[eventbus] could not write dead letter for %s", msg_id)
+        await r.xack(STREAM, GROUP, msg_id)
+
+    async def _handle(self, r, msg_id: str, fields: dict) -> None:
+        payload = fields.get("data", "")
+        try:
+            event = json.loads(payload)
+        except Exception as exc:
+            # Unparseable: retrying cannot help.
+            await self._dead_letter(r, msg_id, payload, f"malformed envelope: {exc}")
+            return
+
+        idem = event.get("idempotency_key", msg_id)
+        if idem in self._seen:
+            await r.xack(STREAM, GROUP, msg_id)
+            return
+
+        # Run every handler, collecting failures. `_safe` swallows exceptions so
+        # one failing handler cannot prevent the others from running.
+        failures = [exc for exc in
+                    [await _safe(h, event) for h in self._handlers_for(event["type"])]
+                    if exc is not None]
+
+        if not failures:
+            # Only mark as seen once it actually succeeded — marking on receipt
+            # meant a redelivery after a crash was skipped as a duplicate.
+            self._seen.add(idem)
+            if len(self._seen) > 10_000:
+                self._seen.clear()
+            await r.xack(STREAM, GROUP, msg_id)
+            return
+
+        # Leave unacked so the group redelivers it. Previously the ack happened
+        # unconditionally, so a handler crash silently dropped the event and the
+        # listing stayed wedged mid-pipeline with no retry and no trace.
+        reason = "; ".join(str(e) for e in failures)
+        deliveries = self._deliveries.get(msg_id, 0) + 1
+        self._deliveries[msg_id] = deliveries
+        if deliveries >= MAX_DELIVERIES:
+            _log.error("[eventbus] dead-lettering %s after %d attempts: %s",
+                       msg_id, deliveries, reason)
+            self._deliveries.pop(msg_id, None)
+            await self._dead_letter(r, msg_id, payload, reason)
+        else:
+            _log.warning("[eventbus] handler failure on %s (attempt %d/%d): %s",
+                         event.get("type"), deliveries, MAX_DELIVERIES, reason)
+
     async def _consume_loop(self) -> None:
         r = await self._client()
         consumer = f"worker-{uuid.uuid4().hex[:8]}"
         while True:
             try:
-                rows = await r.xreadgroup(GROUP, consumer, {STREAM: ">"}, count=10, block=2000)
-                if not rows:
-                    continue
-                for _stream, messages in rows:
-                    for msg_id, fields in messages:
-                        try:
-                            event = json.loads(fields["data"])
-                            idem = event.get("idempotency_key", msg_id)
-                            if idem in self._seen:
-                                await r.xack(STREAM, GROUP, msg_id)
-                                continue
-                            self._seen.add(idem)
-                            if len(self._seen) > 10_000:
-                                self._seen.clear()
-                            for h in self._handlers_for(event["type"]):
-                                await _safe(h, event)
-                            await r.xack(STREAM, GROUP, msg_id)
-                        except Exception as exc:
-                            print(f"[eventbus] redis consumer error: {exc}")
+                # ">" delivers new messages; "0" reclaims this consumer's own
+                # unacked backlog so retries actually happen after a failure.
+                for start_id in (">", "0"):
+                    rows = await r.xreadgroup(GROUP, consumer, {STREAM: start_id},
+                                              count=10, block=2000 if start_id == ">" else 0)
+                    for _stream, messages in rows or []:
+                        for msg_id, fields in messages:
+                            try:
+                                await self._handle(r, msg_id, fields)
+                            except Exception:
+                                _log.exception("[eventbus] consumer error on %s", msg_id)
             except asyncio.CancelledError:
                 break
-            except Exception as exc:
-                print(f"[eventbus] redis loop error: {exc}")
+            except Exception:
+                _log.exception("[eventbus] redis loop error")
                 await asyncio.sleep(1)
 
 
-async def _safe(handler: Handler, event: dict) -> None:
+async def _safe(handler: Handler, event: dict) -> Exception | None:
+    """Run a handler, returning the exception instead of raising it.
+
+    Returning it (rather than only logging) is what lets the Redis consumer
+    decide whether to ack, retry, or dead-letter — it previously had no way to
+    tell a successful handler from a failed one.
+    """
     try:
         await handler(event)
-    except Exception:
+        return None
+    except Exception as exc:
         # Full traceback, not just the message — a swallowed handler error here
         # is otherwise invisible (dropped pipeline event with no trace).
         _log.exception("[eventbus] handler error on %s", event.get("type"))
+        return exc
 
 
 def get_bus() -> _MemoryBus | _RedisBus:

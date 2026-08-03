@@ -20,6 +20,18 @@ SYSTEM = system_prompt_for("Buyer Representative Agent",
 
 _PLACEHOLDER_RE = re.compile(r"\[(?:your|seller|buyer|product|company|recipient)[^\]]{0,30}\]", re.I)
 
+# Context budget. Every one of these is resent on each reply, so an unbounded
+# thread or order ledger turned a ~2k-token call into an ever-growing one.
+_MAX_ORDERS = 8
+_MAX_HISTORY_MSGS = 20
+_MAX_MSG_CHARS = 600
+_MAX_README_CHARS = 4000
+
+
+def _clip(text: str | None, limit: int) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + " …[truncated]"
+
 
 def _strip_placeholders(text: str, seller_name: str, rep_name: str) -> str:
     """Belt-and-braces for the prompt rule above.
@@ -51,15 +63,20 @@ async def next_message(chat_id: str) -> dict:
         rep_name = f"{buyer_name}'s AI Rep"
 
 
-        # Fetch buyer's past orders
-        orders_stmt = select(Order).where(Order.buyer_id == chat.buyer_id)
-        orders = (await db.execute(orders_stmt)).scalars().all()
+        # Recent orders only. This is anchoring context for a discount argument,
+        # not an audit trail — an unbounded dump made prompt cost grow with the
+        # buyer's lifetime order count and eventually blew the context window.
+        orders_stmt = (select(Order)
+                       .where(Order.buyer_id == chat.buyer_id)
+                       .order_by(Order.created_at.desc())
+                       .limit(_MAX_ORDERS))
+        orders = list((await db.execute(orders_stmt)).scalars().all())
         orders_summary = [
             f"Order: Product ID {o.listing_id}, Price ${o.amount_cents/100:.2f}, Status {o.status}"
             for o in orders
         ]
         orders_text = "\n".join(orders_summary) if orders_summary else "No previous orders."
-        
+
         # Fetch listing details
         listing = await db.get(Listing, chat.listing_id)
         listing_details = ""
@@ -72,13 +89,21 @@ async def next_message(chat_id: str) -> dict:
                 f"Tech Stack: {listing.tech_stack}\n"
             )
             
-        # Fetch message history
-        msgs_stmt = select(ChatMessage).where(ChatMessage.chat_id == chat_id).order_by(ChatMessage.created_at.asc())
-        history_msgs = (await db.execute(msgs_stmt)).scalars().all()
-        history_text = "\n".join([f"{m.sender_name}: {m.text}" for m in history_msgs])
+        # Most recent turns, re-ordered chronologically for the prompt. A long
+        # negotiation would otherwise resend the entire thread on every reply.
+        msgs_stmt = (select(ChatMessage)
+                     .where(ChatMessage.chat_id == chat_id)
+                     .order_by(ChatMessage.created_at.desc())
+                     .limit(_MAX_HISTORY_MSGS))
+        history_msgs = list((await db.execute(msgs_stmt)).scalars().all())[::-1]
+        history_text = "\n".join(
+            f"{m.sender_name}: {_clip(m.text, _MAX_MSG_CHARS)}" for m in history_msgs
+        )
 
         budget = (chat.agent_budget_cents or 0) / 100
-        context = nego.buyer_readme_context if nego else ""
+        # Buyer-supplied free text — clipped so a pasted repo can't dominate
+        # (or blow) the context window.
+        context = _clip(nego.buyer_readme_context if nego else "", _MAX_README_CHARS)
         
         prompt = (
             f"You are negotiating on behalf of the buyer {buyer_name}.\n"
@@ -100,13 +125,31 @@ async def next_message(chat_id: str) -> dict:
         
         result = await run_agent("negotiator", SYSTEM, prompt, trigger="api")
 
+        # A degraded run (budget cap hit, every provider down, no key) returns
+        # internal diagnostic text — never a negotiation message. Posting it
+        # would put scaffolding like "[Budget exceeded — heuristic-only mode]"
+        # into a thread the seller reads. Fail loudly to the buyer instead, and
+        # leave the thread untouched so the rep can retry cleanly.
+        if result.stub:
+            return {"chat_id": chat_id, "stub": True,
+                    "error": "The AI representative is temporarily unavailable. "
+                             "Please try again shortly."}
+
+        text = _strip_placeholders(result.text, seller_name, rep_name)
+        if not text.strip():
+            return {"chat_id": chat_id, "stub": True,
+                    "error": "The AI representative could not draft a message. "
+                             "Please try again."}
+
         msg = ChatMessage(chat_id=chat_id, sender_id="agent",
                           sender_name=rep_name,
-                          text=_strip_placeholders(result.text, seller_name, rep_name),
+                          text=text,
                           is_agent_rep=True)
         chat.unread_for = ["seller"]
         db.add(msg)
         await db.commit()
         await db.refresh(msg)
-        return {"chat_id": chat_id, "message": result.text,
-                "message_id": msg.id, "stub": result.stub}
+        # Return the sanitised text — the raw draft may still carry mail-merge
+        # scaffolding that the stored message no longer has.
+        return {"chat_id": chat_id, "message": text,
+                "message_id": msg.id, "stub": False}

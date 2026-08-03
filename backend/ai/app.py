@@ -13,6 +13,7 @@ Endpoints (see backend.md §11):
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -36,6 +37,8 @@ from backend.shared.security import Principal, ai_rate_limit, current_user, hash
 from .agents import concierge, feature_estimator, negotiator, pricing, repo_intake
 from .budget import budget
 from .workers import register_handlers
+
+log = logging.getLogger("vitrine.ai")
 
 router = APIRouter(tags=["ai"])
 
@@ -62,10 +65,28 @@ async def intake(body: IntakeIn, listing_id: str,
 
 
 @router.post("/ai/concierge", dependencies=[Depends(ai_rate_limit)])
-async def concierge_stream(body: ConciergeIn, user: Principal | None = Depends(optional_user), db: AsyncSession = Depends(get_session)):
+async def concierge_stream(request: Request, body: ConciergeIn,
+                           user: Principal | None = Depends(optional_user),
+                           db: AsyncSession = Depends(get_session)):
     async def gen():
-        async for chunk in concierge.stream(body.query, body.history):
-            yield {"data": json.dumps(chunk)}
+        # The client's loading state only clears on a terminal event, so the
+        # stream must ALWAYS end with one — previously an exception anywhere in
+        # concierge.stream() aborted the generator silently and the buyer's UI
+        # span forever.
+        try:
+            async for chunk in concierge.stream(body.query, body.history):
+                # Stop doing paid work for a buyer who has navigated away.
+                if await request.is_disconnected():
+                    return
+                yield {"data": json.dumps(chunk)}
+        except Exception:
+            log.exception("concierge stream failed")
+            yield {"data": json.dumps({
+                "type": "error",
+                "message": "The concierge is temporarily unavailable. Please try again.",
+            })}
+            yield {"data": json.dumps({"type": "done"})}
+
     return EventSourceResponse(gen())
 
 

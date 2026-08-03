@@ -27,7 +27,13 @@ async def test_concierge_stream_allows_anonymous(monkeypatch, db_session):
         def __call__(self):
             return self
 
+    # Patch the single chokepoint. Patching only `_get_configured_clients` +
+    # OPENAI_API_KEY was not enough: `_default()` caches its env-key clients on
+    # first use, so a real GEMINI_API_KEY in .env still produced a live client
+    # and this test made an actual network call (which is what made the suite
+    # hang for minutes before the client grew a timeout).
     monkeypatch.setattr(client, "_get_configured_clients", _empty_clients)
+    monkeypatch.setattr(client, "_resolved_clients", _empty_clients)
     monkeypatch.setattr("backend.shared.settings.settings.OPENAI_API_KEY", "")
     monkeypatch.setattr(concierge_module, "SessionLocal", MockSessionLocal())
     monkeypatch.setattr(base_module, "SessionLocal", MockSessionLocal())

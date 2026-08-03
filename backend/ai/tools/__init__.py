@@ -686,21 +686,29 @@ def _mirror_field_onto_listing(listing, raw_key: str, key: str, value) -> None:
         sd["methodology"] = sd.get("methodology") or _as_text(value)
         listing.sdlc = sd
 
-@register("submit_verdict", "Approve or flag listing verification",
+# AGENTS.md §2: the Verification Agent "cannot hard-reject — `flag` always
+# escalates to a human". Map each documented verdict to the listing state it may
+# move to; anything unrecognised escalates rather than terminating the listing.
+_VERDICT_STATUS = {
+    "approve": "review",          # queued for a human/admin to publish
+    "request_changes": "draft",   # back to the seller
+    "flag": "flagged",            # admin queue
+}
+
+
+@register("submit_verdict", "Record the verification verdict for a listing",
           {"type": "object", "properties": {
               "id": {"type": "string"},
-              "verdict": {"type": "string"}
+              "verdict": {"type": "string", "enum": sorted(_VERDICT_STATUS)}
           }, "required": ["id", "verdict"]})
 async def submit_verdict(id: str, verdict: str) -> dict:
     async with SessionLocal() as db:
         listing = await db.get(Listing, id)
         if listing:
-            if verdict == "approve":
-                listing.status = "review"
-            elif verdict == "request_changes":
-                listing.status = "draft"
-            else:
-                listing.status = "rejected"
+            # Unknown verdicts escalate. The previous `else: rejected` branch
+            # turned the documented `flag` value into a silent terminal reject
+            # with no human in the loop — the exact outcome the guardrail forbids.
+            listing.status = _VERDICT_STATUS.get(verdict, "flagged")
             db.add(listing)
             await db.commit()
             return {"status": listing.status}

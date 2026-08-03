@@ -17,6 +17,7 @@ Pricing (gpt-4o-mini, approx): $0.15 / 1M input, $0.60 / 1M output.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 
@@ -26,6 +27,18 @@ from backend.shared.settings import settings
 # admin_configs row. Keeps LLM calls off the DB on the hot path while still
 # picking up admin key rotations within a few seconds.
 _CONFIG_TTL_S = 20.0
+
+# Hard ceiling on a single provider call. Without this the SDK default (10 min)
+# applies, so one hung upstream connection pins a request — and a worker — for
+# the whole window instead of failing over to the next provider.
+_REQUEST_TIMEOUT_S = 30.0
+
+# Cap on concurrent in-flight provider calls for this process. The per-IP rate
+# limiter bounds request *rate* per client; nothing bounded total concurrency,
+# so a burst spread across many users could open unlimited upstream connections
+# and trigger provider-side 429 storms. Backpressure belongs here, once.
+_MAX_CONCURRENT_CALLS = 8
+_call_slot = asyncio.Semaphore(_MAX_CONCURRENT_CALLS)
 
 # Width of every stored listing embedding. Cosine similarity zips the query and
 # stored vectors, so all providers must agree on this number.
@@ -95,10 +108,12 @@ class AIClient:
             from openai import AsyncOpenAI
             built: list[tuple] = []
             if settings.OPENAI_API_KEY:
-                built.append((AsyncOpenAI(api_key=settings.OPENAI_API_KEY), "openai"))
+                built.append((AsyncOpenAI(api_key=settings.OPENAI_API_KEY,
+                                          timeout=_REQUEST_TIMEOUT_S), "openai"))
             if settings.GEMINI_API_KEY:
                 built.append((AsyncOpenAI(api_key=settings.GEMINI_API_KEY,
-                                          base_url=PROVIDER_BASE_URLS["gemini"]), "gemini"))
+                                          base_url=PROVIDER_BASE_URLS["gemini"],
+                                          timeout=_REQUEST_TIMEOUT_S), "gemini"))
             self._env_clients = built
         return self._env_clients
 
@@ -141,8 +156,8 @@ class AIClient:
                     if not raw_key or provider not in ("openai", "grok", "nvidia", "gemini", "custom"):
                         continue
                     base_url = _bases.get(provider)
-                    clients.append((AsyncOpenAI(api_key=raw_key, base_url=base_url) if base_url
-                                    else AsyncOpenAI(api_key=raw_key), provider))
+                    clients.append((AsyncOpenAI(api_key=raw_key, base_url=base_url,
+                                                timeout=_REQUEST_TIMEOUT_S), provider))
 
                 self._clients = clients
                 self._cached_hash = config_hash
@@ -154,13 +169,12 @@ class AIClient:
         return self._clients
 
     async def chat(self, messages: list[dict], *, tools: list | None = None,
-                   model: str | None = None, stream: bool = False,
-                   json_mode: bool = False) -> LLMResult:
+                   model: str | None = None, json_mode: bool = False) -> LLMResult:
 
         clients = await self._resolved_clients()
 
         if not clients:
-            return self._stub(messages, model or settings.OPENAI_MODEL)
+            return self._stub(model or settings.OPENAI_MODEL)
 
         last_exc: Exception | None = None
 
@@ -175,7 +189,11 @@ class AIClient:
                     if provider in ("openai", "grok", "gemini"):
                         kwargs["response_format"] = {"type": "json_object"}
                 try:
-                    resp = await client.chat.completions.create(**kwargs)
+                    async with _call_slot:
+                        resp = await asyncio.wait_for(
+                            client.chat.completions.create(**kwargs),
+                            timeout=_REQUEST_TIMEOUT_S,
+                        )
                     choice = resp.choices[0].message
                     usage = resp.usage
                     if last_exc is not None:
@@ -196,7 +214,7 @@ class AIClient:
         # 500-ing the caller: agents already know how to handle stub output, and
         # a transient upstream outage should not take the whole app down.
         print(f"[ai] all providers failed ({last_exc}); serving stub")
-        return self._stub(messages, model or settings.OPENAI_MODEL)
+        return self._stub(model or settings.OPENAI_MODEL)
 
     def _get_provider_models(self, provider: str, requested: str | None) -> list[str]:
         if provider == "openai":
@@ -228,7 +246,10 @@ class AIClient:
                 embed_model = settings.GEMINI_EMBED_MODEL
                 kwargs = {"model": embed_model, "input": text, "dimensions": EMBED_DIM}
             try:
-                resp = await client.embeddings.create(**kwargs)
+                async with _call_slot:
+                    resp = await asyncio.wait_for(
+                        client.embeddings.create(**kwargs), timeout=_REQUEST_TIMEOUT_S
+                    )
                 vec = resp.data[0].embedding
                 if len(vec) != EMBED_DIM:
                     continue
@@ -239,10 +260,13 @@ class AIClient:
         return _stub_embedding(text)
 
     @staticmethod
-    def _stub(messages: list[dict], model: str) -> LLMResult:
-        last = messages[-1]["content"] if messages else ""
+    def _stub(model: str) -> LLMResult:
+        # Deliberately does NOT echo the prompt. Callers must gate on `.stub`,
+        # but any that forget would otherwise republish prompt content — the
+        # negotiator's prompt opens with the buyer's authorised max budget, so
+        # an echo here surfaced it straight to the seller.
         return LLMResult(
-            text=f"[stub:{model}] (no OPENAI_API_KEY) echo: {str(last)[:120]}",
+            text=f"[stub:{model}] no model provider configured",
             tokens_in=50, tokens_out=20, model=model, stub=True,
         )
 

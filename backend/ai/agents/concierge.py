@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 
 from backend.shared.db import SessionLocal
@@ -12,10 +13,38 @@ from backend.ai.searching import parse_query, search_listings
 from ..client import client
 from .base import resolve_system_prompt, system_prompt_for
 
+_log = logging.getLogger("vitrine.agents.concierge")
+
 _SYSTEM_FALLBACK = system_prompt_for(
     "Buyer Concierge Agent",
     "Help buyers find software in the catalog. Never invent products.",
 )
+
+
+# Conversation-history limits. `history` is client-supplied, so without these a
+# caller could both inflate per-request token cost without bound and inject an
+# extra "system" turn after the real system prompt.
+_MAX_HISTORY_TURNS = 10
+_MAX_HISTORY_CHARS = 1500
+_ALLOWED_ROLES = ("user", "assistant")
+
+
+def _sanitize_history(history: list[dict] | None) -> list[dict]:
+    if not history:
+        return []
+    out: list[dict] = []
+    for h in history[-_MAX_HISTORY_TURNS:]:
+        if not isinstance(h, dict):
+            continue
+        role = h.get("role", "user")
+        # Anything that isn't a genuine conversational turn (notably "system")
+        # is demoted to "user" rather than trusted.
+        if role not in _ALLOWED_ROLES:
+            role = "user"
+        content = str(h.get("content", ""))[:_MAX_HISTORY_CHARS]
+        if content:
+            out.append({"role": role, "content": content})
+    return out
 
 
 async def _candidates(query: str, k: int = 4) -> list[Listing]:
@@ -52,7 +81,13 @@ def _fallback_answer(query: str, rows: list[Listing]) -> str:
 
 async def stream(query: str, history: list[dict] | None = None) -> AsyncIterator[dict]:
     """Yields SSE-ready dicts: {'type': 'token'|'results'|'done', ...}."""
-    rows = await _candidates(query)
+    # Retrieval failure must not abort the stream before any event is sent —
+    # the client only clears its loading state on a terminal event.
+    try:
+        rows = await _candidates(query)
+    except Exception:
+        _log.exception("concierge retrieval failed")
+        rows = []
     yield {"type": "results", "results": [
         {"id": r.id, "slug": r.slug, "name": r.name, "tagline": r.tagline,
          "price": r.price_cents / 100, "vitrineScore": r.vitrine_score} for r in rows]}
@@ -80,9 +115,7 @@ async def stream(query: str, history: list[dict] | None = None) -> AsyncIterator
     
     system = await resolve_system_prompt("concierge", _SYSTEM_FALLBACK)
     messages = [{"role": "system", "content": system}]
-    if history:
-        for h in history:
-            messages.append({"role": h.get("role", "user"), "content": h.get("content", "")})
+    messages.extend(_sanitize_history(history))
     messages.append({"role": "user", "content": msg})
 
     is_stub = False
@@ -109,13 +142,17 @@ async def stream(query: str, history: list[dict] | None = None) -> AsyncIterator
         is_stub = True
 
     budget.record(cost)
-    async with SessionLocal() as db:
-        db.add(AgentRun(agent="concierge", trigger_event="api",
-                        input_hash=f"concierge:{content_hash(query)}",
-                        model=model_used, tokens_in=tokens_in,
-                        tokens_out=tokens_out, cost_usd=cost,
-                        status="degraded" if is_stub else "ok"))
-        await db.commit()
+    # Cost accounting must never break the answer the buyer is waiting on.
+    try:
+        async with SessionLocal() as db:
+            db.add(AgentRun(agent="concierge", trigger_event="api",
+                            input_hash=f"concierge:{content_hash(query)}",
+                            model=model_used, tokens_in=tokens_in,
+                            tokens_out=tokens_out, cost_usd=cost,
+                            status="degraded" if is_stub else "ok"))
+            await db.commit()
+    except Exception:
+        _log.exception("could not record concierge run")
 
     for word in answer.split(" "):
         yield {"type": "token", "text": word + " "}
