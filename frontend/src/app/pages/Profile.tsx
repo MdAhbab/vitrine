@@ -678,7 +678,12 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
                           themeDefault === 'dark' ? 'border-accent bg-accent/5 font-semibold text-accent' : 'border-border-c hover:border-text-soft bg-surface-2'
                         }`}
                       >
-                        <div className="w-5 h-5 rounded-full bg-slate-900 border border-slate-700" />
+                        {/* Literal theme values, not tokens: a swatch must show
+                            the theme it names, not the theme in use. */}
+                        <div
+                          className="w-5 h-5 rounded-full border"
+                          style={{ background: '#0E0D0C', borderColor: '#2A2620' }}
+                        />
                         <span className="text-xs font-mono">Dark Edition</span>
                       </button>
 
@@ -693,7 +698,12 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
                           themeDefault === 'light' ? 'border-accent bg-accent/5 font-semibold text-accent' : 'border-border-c hover:border-text-soft bg-surface-2'
                         }`}
                       >
-                        <div className="w-5 h-5 rounded-full bg-slate-100 border border-slate-350" />
+                        {/* `border-slate-350` was not a real Tailwind class, so
+                            this border silently never rendered. */}
+                        <div
+                          className="w-5 h-5 rounded-full border"
+                          style={{ background: '#FAF8F4', borderColor: '#E6E1D7' }}
+                        />
                         <span className="text-xs font-mono">Paper Light</span>
                       </button>
                     </div>

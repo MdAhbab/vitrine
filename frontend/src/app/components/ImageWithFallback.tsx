@@ -14,7 +14,9 @@ export function ImageWithFallback(props: React.ImgHTMLAttributes<HTMLImageElemen
 
   return didError ? (
     <div
-      className={`inline-block bg-gray-100 text-center align-middle ${className ?? ''}`}
+      // Themed surface token, not a fixed light gray — the broken-image state
+      // was the one visual state guaranteed to look wrong in dark mode.
+      className={`inline-block bg-surface-2 text-center align-middle ${className ?? ''}`}
       style={style}
     >
       <div className="flex items-center justify-center w-full h-full">

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { Key, Sparkles, Shield, ToggleLeft, ToggleRight, Plus, Trash2, Eye, EyeOff, Sliders, Mail, Save, Bot, Receipt, ScrollText, Settings2 } from 'lucide-react';
 import { useStore, type AdminApiKey } from '../lib/store';
@@ -19,8 +19,15 @@ export function CuratorConsole() {
   const [newCategory, setNewCategory] = useState('');
   const [newFramework, setNewFramework] = useState('');
   const [formSchemaText, setFormSchemaText] = useState('');
+  const formsDirty = useRef(false);
 
   useEffect(() => {
+    // Any admin-config save (fees, flags, branding…) refetches the whole config
+    // and hands back a new `forms` reference even when its contents are
+    // unchanged. Syncing unconditionally meant an unrelated save wiped out
+    // whatever the curator was mid-way through typing here. Only accept
+    // upstream values while this editor is untouched.
+    if (formsDirty.current) return;
     setFormSchemaText(JSON.stringify(forms, null, 2));
   }, [forms]);
 
@@ -304,7 +311,7 @@ export function CuratorConsole() {
           <Card title="Intake Forms Schema" hint="Edit the YAML/JSON schema structure for intake form fields and sections.">
             <textarea
               value={formSchemaText}
-              onChange={(e) => setFormSchemaText(e.target.value)}
+              onChange={(e) => { formsDirty.current = true; setFormSchemaText(e.target.value); }}
               rows={15}
               placeholder="Paste FORM_SCHEMA JSON here..."
               className="w-full hairline rounded-xl bg-bg p-4 text-sm font-mono leading-relaxed outline-none focus:border-accent resize-y"
@@ -318,6 +325,8 @@ export function CuratorConsole() {
                     return;
                   }
                   await updateAdminConfig({ forms: parsed });
+                  // Saved: let the editor track upstream again.
+                  formsDirty.current = false;
                   toast.success('Form schema updated successfully');
                   flash();
                 } catch (e) {

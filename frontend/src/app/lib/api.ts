@@ -215,12 +215,22 @@ export const api = {
 };
 
 // Concierge SSE (POST + stream). Use fetch + ReadableStream reader.
-export async function conciergeStream(query: string, onChunk: (c: any) => void) {
+//
+// `signal` lets the caller abort when the panel closes. Without it the reader
+// loop kept consuming the response and calling back into a component the user
+// had already dismissed — burning network and server-side agent budget for an
+// answer nobody was waiting for.
+export async function conciergeStream(
+  query: string,
+  onChunk: (c: any) => void,
+  signal?: AbortSignal,
+) {
   let lastError: unknown;
   for (const base of BASES) {
     try {
       const res = await fetch(apiUrl(base, '/ai/concierge'), {
         method: 'POST',
+        signal,
         headers: {
           'Content-Type': 'application/json',
           ...(tok.access ? { Authorization: `Bearer ${tok.access}` } : {}),
@@ -253,6 +263,9 @@ export async function conciergeStream(query: string, onChunk: (c: any) => void) 
       }
       return;
     } catch (e) {
+      // An abort is the caller's own doing, not a transport failure — don't
+      // retry the next base and don't surface it as an error.
+      if ((e as Error)?.name === 'AbortError') return;
       lastError = e;
       if (!canTryNextBase(e)) break;
     }

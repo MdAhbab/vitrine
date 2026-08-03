@@ -10,6 +10,12 @@
     />
     <meta name="robots" content="index, follow" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- The stylesheet is pulled in via an @import in styles/fonts.css, which
+         blocks CSSOM construction until Google Fonts answers. The hero heading
+         is the LCP element and renders in Fraunces, so warming both connections
+         here removes a full round-trip from first meaningful paint. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
     <script>
       // Apply the saved theme before first paint so dark-mode users never see

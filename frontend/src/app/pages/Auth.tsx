@@ -232,8 +232,10 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
 
 function ErrorNote({ message }: { message: string }) {
   if (!message) return null;
+  // Uses --danger like every other error surface in the app. The hardcoded
+  // red-500 here was a different hue and did not shift for dark mode.
   return (
-    <p role="alert" className="text-sm rounded-xl px-3 py-2 border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400">
+    <p role="alert" className="text-sm rounded-xl px-3 py-2 border border-danger/40 bg-danger/10 text-danger">
       {message}
     </p>
   );

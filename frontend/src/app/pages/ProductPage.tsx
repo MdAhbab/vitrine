@@ -23,7 +23,13 @@ export function ProductPage({
 
   useEffect(() => {
     if (!product || USE_MOCKS) return;
-    api.reviews(product.id).then(setReviews).catch(() => setReviews([]));
+    // Navigating between products quickly could let a slow response for the
+    // previous listing resolve last and overwrite the current one's reviews.
+    let active = true;
+    api.reviews(product.id)
+      .then((r) => { if (active) setReviews(r); })
+      .catch(() => { if (active) setReviews([]); });
+    return () => { active = false; };
   }, [product?.id]);
 
   if (!product) {

@@ -24,10 +24,22 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, streaming]);
+
+  // The panel is always mounted and merely hidden, so closing it never used to
+  // stop an in-flight stream. Abort on close (and on unmount).
+  useEffect(() => {
+    if (open) return;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+  }, [open]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   async function sendMock(q: string) {
     const tokens = [
@@ -68,6 +80,7 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
     setMessages((m) => [...m, { role: 'assistant', text: '' }]);
 
     await conciergeStream(q, (chunk) => {
+      if (abortRef.current?.signal.aborted) return;
       if (chunk.type === 'token' && chunk.text) {
         acc += chunk.text;
         setMessages((m) => {
@@ -132,7 +145,7 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
           return next;
         });
       }
-    });
+    }, abortRef.current?.signal);
   }
 
   async function send(q: string) {
@@ -144,6 +157,9 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
     setMessages((m) => [...m, { role: 'user', text: q }]);
     setInput('');
     setStreaming(true);
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       if (USE_MOCKS) {
         await sendMock(q);
@@ -151,9 +167,11 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
         await sendLive(q);
       }
     } catch (e) {
+      if (controller.signal.aborted) return;
       toast.error(e instanceof Error ? e.message : 'Concierge unavailable');
       setMessages((m) => [...m, { role: 'assistant', text: 'Sorry — I could not reach the concierge service. Try again shortly.' }]);
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       setStreaming(false);
     }
   }

@@ -30,6 +30,21 @@ export default defineConfig(({ mode }) => {
       },
     },
 
+    build: {
+      rollupOptions: {
+        output: {
+          // Split rarely-changing vendor code out of the app chunk so a normal
+          // deploy doesn't invalidate React/motion for every returning visitor.
+          // Route-level React.lazy already keeps recharts out of the initial
+          // load; this is about cache lifetime, not first-load size.
+          manualChunks: {
+            'vendor-react': ['react', 'react-dom'],
+            'vendor-motion': ['motion/react'],
+          },
+        },
+      },
+    },
+
     // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
     assetsInclude: ['**/*.svg', '**/*.csv'],
   }

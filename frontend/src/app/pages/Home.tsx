@@ -22,8 +22,15 @@ export function Home({
   const adminConfig = useStore((s) => s.adminConfig);
   const categories = useStore((s) => s.categories);
   const products = useCatalogProducts();
-  const top = [...products].sort((a, b) => b.vitrineScore - a.vitrineScore);
-  
+  // `top` was recomputed unmemoized every render, so it was a fresh array
+  // reference each time — which silently defeated every useMemo below that
+  // depended on it, and reset the carousel's autoplay timer on every render
+  // (including the one its own 'select' handler triggers).
+  const top = useMemo(
+    () => [...products].sort((a, b) => b.vitrineScore - a.vitrineScore),
+    [products],
+  );
+
   const featuredProducts = useMemo(() => {
     if (adminConfig?.featuredIds && adminConfig.featuredIds.length > 0) {
       const matched = adminConfig.featuredIds
@@ -53,19 +60,29 @@ export function Home({
   }, [emblaApi]);
 
   useEffect(() => {
+    // Respect the OS reduced-motion preference. The CSS rule in theme.css only
+    // zeroes CSS animations — a JS-driven carousel keeps advancing regardless,
+    // and there is no pause control (WCAG 2.2.2).
     if (!emblaApi || featuredProducts.length <= 1) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     const interval = setInterval(() => {
       emblaApi.scrollNext();
     }, 6000);
     return () => clearInterval(interval);
   }, [emblaApi, featuredProducts]);
 
-  const bestUi = Array.from(
-    new Map(
-      [...top.filter((p) => p.badges.includes('best-ui')), ...top].map((p) => [p.id, p])
-    ).values()
-  ).slice(0, 6);
-  const newThisWeek = [...products].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 6);
+  const bestUi = useMemo(
+    () => Array.from(
+      new Map(
+        [...top.filter((p) => p.badges.includes('best-ui')), ...top].map((p) => [p.id, p]),
+      ).values(),
+    ).slice(0, 6),
+    [top],
+  );
+  const newThisWeek = useMemo(
+    () => [...products].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 6),
+    [products],
+  );
 
   return (
     <main className="relative">

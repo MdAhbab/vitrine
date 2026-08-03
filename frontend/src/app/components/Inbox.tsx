@@ -28,14 +28,23 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
   }, [visible.map((t) => t.id).join()]);
 
   useEffect(() => {
-    if (activeId && loadMessages) {
+    if (!activeId || !loadMessages) return;
+    const poll = () => {
+      // Don't poll a backgrounded tab. This writes to the global `messages`
+      // slice on every tick, re-rendering every subscriber app-wide, and it
+      // was running at 3s forever regardless of whether anyone was looking.
+      if (document.visibilityState !== 'visible') return;
       loadMessages(activeId).catch(() => {});
-      const t = setInterval(() => {
-        loadMessages(activeId).catch(() => {});
-      }, 3000);
-      return () => clearInterval(t);
-    }
-  }, [activeId]);
+    };
+    poll();
+    const t = setInterval(poll, 5000);
+    // Catch up immediately when the tab comes back rather than waiting a tick.
+    document.addEventListener('visibilitychange', poll);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', poll);
+    };
+  }, [activeId, loadMessages]);
 
   const active = visible.find((t) => t.id === activeId);
   const msgs = messages.filter((m) => m.threadId === activeId);

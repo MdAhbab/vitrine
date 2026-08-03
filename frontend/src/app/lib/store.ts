@@ -277,6 +277,9 @@ const seedTxns: Transaction[] = [PRODUCTS[1], PRODUCTS[4], PRODUCTS[2]].flatMap(
   }];
 });
 
+/** In-flight full refresh, shared by every concurrent loadData() caller. */
+let inFlightLoad: Promise<void> | null = null;
+
 export const useStore = create<State>((set, get) => ({
   user: null,
   threads: seedThreads,
@@ -549,6 +552,11 @@ export const useStore = create<State>((set, get) => ({
 
   loadData: async () => {
     if (USE_MOCKS) return;
+    // Single-flight. signIn() kicks off a load and Auth.tsx awaited a second
+    // one immediately after, so every login fired two concurrent full refreshes
+    // whose results raced — last writer won, with no ordering guarantee.
+    if (inFlightLoad) return inFlightLoad;
+    inFlightLoad = (async () => {
     try {
       await get().loadPublicConfig();
       const user = get().user;
@@ -576,6 +584,8 @@ export const useStore = create<State>((set, get) => ({
     } catch (e) {
       console.error("Failed to load data", e);
     }
+    })().finally(() => { inFlightLoad = null; });
+    return inFlightLoad;
   },
 
   loadMessages: async (threadId: string) => {

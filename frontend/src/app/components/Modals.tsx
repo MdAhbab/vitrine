@@ -1,33 +1,17 @@
 import { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { X, Bot, Sparkles, Check, ShieldCheck, CreditCard, Lock, FileText, Upload } from 'lucide-react';
 import { toast } from 'sonner';
+import { Dialog } from './Dialog';
 import type { Product } from '../lib/mockData';
 import { api, USE_MOCKS } from '../lib/api';
 import { useStore, activeRepsForBuyer, sellerIdFor } from '../lib/store';
 import { useShallow } from 'zustand/react/shallow';
 
-function Shell({ open, onClose, children, max = 'max-w-lg' }: { open: boolean; onClose: () => void; children: React.ReactNode; max?: string }) {
+function Shell({ open, onClose, children, max = 'max-w-lg', label }: { open: boolean; onClose: () => void; children: React.ReactNode; max?: string; label: string }) {
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          onClick={onClose}
-          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm grid place-items-center p-4"
-        >
-          <motion.div
-            initial={{ scale: 0.96, y: 12, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 240, damping: 26 }}
-            onClick={(e) => e.stopPropagation()}
-            className={`bg-surface hairline rounded-2xl w-full ${max} shadow-2xl overflow-hidden max-h-[90vh] flex flex-col`}
-          >
-            {children}
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <Dialog open={open} onClose={onClose} max={max} label={label}>
+      {children}
+    </Dialog>
   );
 }
 
@@ -144,18 +128,23 @@ export function BargainModal({ open, onClose, product, onOpenInbox }: { open: bo
         await (store as any).loadData();
       }
 
-      // Trigger negotiate agent reply async
-      api.negotiate(thread.id).catch(() => {});
+      // Trigger the rep's first reply in the background. It returns 200 with an
+      // `error` field when the agent is degraded (budget cap, provider down) —
+      // the rep deliberately posts nothing rather than leaking internal text
+      // into the seller's thread, so surface that instead of failing silently.
+      api.negotiate(thread.id)
+        .then((res) => { if (res?.error) toast.message('Your rep will follow up shortly', { description: res.error }); })
+        .catch(() => {});
 
       onClose();
       onOpenInbox();
     } catch (err: any) {
-      alert(err.message || "Failed to start negotiation");
+      toast.error(err?.message || 'Could not start the negotiation');
     }
   };
 
   return (
-    <Shell open={open} onClose={onClose} max="max-w-xl">
+    <Shell open={open} onClose={onClose} max="max-w-xl" label={`Bargain on ${product.name}`}>
       <Header eyebrow="AI Buyer Rep" title={`Bargain on ${product.name}`} onClose={onClose} icon={<Bot size={14} />} />
 
       {/* Step indicator */}
@@ -378,7 +367,7 @@ export function RequestFeaturesModal({ open, onClose, product }: { open: boolean
 
   if (!product) return null;
   return (
-    <Shell open={open} onClose={onClose} max="max-w-2xl">
+    <Shell open={open} onClose={onClose} max="max-w-2xl" label={`Request features for ${product.name}`}>
       <Header eyebrow="Custom build" title={`Request features for ${product.name}`} onClose={onClose} icon={<Sparkles size={14} />} />
       <div className="p-6 space-y-5 overflow-y-auto">
         <p className="text-sm text-text-soft">
@@ -518,7 +507,7 @@ export function CheckoutModal({ open, onClose, product, tierIndex = 0 }: { open:
   };
 
   return (
-    <Shell open={open} onClose={onClose} max="max-w-3xl">
+    <Shell open={open} onClose={onClose} max="max-w-3xl" label={step === 'pay' ? 'Checkout' : 'Order complete'}>
       <Header eyebrow="Checkout" title={step === 'pay' ? 'Pay & take it home' : 'Order complete'} onClose={onClose} icon={<CreditCard size={14} />} />
       {step === 'pay' ? (
         <div className="grid md:grid-cols-[1fr_320px]">

@@ -151,7 +151,12 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
         )}
 
         <motion.div
-          key={`${sort}-${cats.join()}-${maxPrice}-${framework}-${hasDemo}-${page}`}
+          // Deliberately excludes maxPrice. The price slider fires on every
+          // pixel of drag, and because this key remounts the whole grid, each
+          // tick was tearing down and rebuilding up to 18 animated cards — the
+          // worst jank on the page, on its most-used control. The discrete
+          // filters below still replay the entrance animation.
+          key={`${sort}-${cats.join()}-${framework}-${hasDemo}-${page}`}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}

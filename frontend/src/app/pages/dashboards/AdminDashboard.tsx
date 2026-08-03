@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 import { Inbox } from '../../components/Inbox';
 import { CuratorConsole } from '../../components/CuratorConsole';
 import { Tabs, Stat, Pill } from './BuyerDashboard';
+import { Dialog } from '../../components/Dialog';
+import { PromptDialog, type PromptRequest } from '../../components/PromptDialog';
 import { api, USE_MOCKS } from '../../lib/api';
 
 const series = Array.from({ length: 14 }, (_, i) => ({
@@ -32,6 +34,7 @@ export function AdminDashboard() {
   const [escrowList, setEscrowList] = useState<any[]>([]);
   const [adminAnalytics, setAdminAnalytics] = useState<any>(null);
   const [editingListing, setEditingListing] = useState<any>(null);
+  const [prompt, setPrompt] = useState<PromptRequest | null>(null);
 
   const loadData = async () => {
     if (USE_MOCKS) return;
@@ -91,49 +94,82 @@ export function AdminDashboard() {
     try {
       await api.adminDecision(id, verdict);
       await loadQueue();
-    } catch (e) {
-      console.error(e);
-      alert("Failed to submit verdict");
+    } catch (e: any) {
+      toast.error('Could not submit the verdict', { description: e?.message });
     }
   };
 
-  const handleDeleteListing = async (id: string) => {
-    if (confirm("Are you sure you want to delete this listing?")) {
-      try {
-        await api.adminDeleteListing(id);
-        await loadQueue();
-      } catch (e) {
-        alert("Failed to delete");
-      }
-    }
+  const handleDeleteListing = (id: string) => {
+    setPrompt({
+      title: 'Delete this listing?',
+      description: 'This removes it from the gallery permanently. Orders already placed are unaffected.',
+      confirmLabel: 'Delete listing',
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await api.adminDeleteListing(id);
+          await loadQueue();
+          toast.success('Listing deleted');
+        } catch (e: any) {
+          toast.error('Could not delete the listing', { description: e?.message });
+        }
+      },
+    });
   };
 
-  const handleUserAction = async (id: string, action: 'ban' | 'unban' | 'delete' | 'reset') => {
+  const runUserAction = async (fn: () => Promise<unknown>, success: string) => {
     try {
-      if (action === 'ban') {
-        const duration = prompt("Enter ban duration (months) or 'infinite':", "1");
-        if (duration) await api.adminBanUser(id, duration === 'infinite' ? 'infinite' : Number(duration));
-      } else if (action === 'unban') {
-        await api.adminBanUser(id, null);
-      } else if (action === 'delete') {
-        if (confirm("Permanently delete this user?")) await api.adminRemoveUser(id);
-      } else if (action === 'reset') {
-        const pwd = prompt("Enter new password for this user:");
-        if (pwd) await api.adminResetUserPass(id, pwd);
-      }
-      loadData();
-    } catch (e) {
-      alert("Action failed");
+      await fn();
+      await loadData();
+      toast.success(success);
+    } catch (e: any) {
+      toast.error('That action failed', { description: e?.message });
     }
+  };
+
+  const handleUserAction = (id: string, action: 'ban' | 'unban' | 'delete' | 'reset') => {
+    if (action === 'unban') {
+      return runUserAction(() => api.adminBanUser(id, null), 'Account reinstated');
+    }
+    if (action === 'ban') {
+      return setPrompt({
+        title: 'Suspend this account',
+        description: "Enter a duration in months, or 'infinite' for a permanent suspension.",
+        input: { label: 'Duration', placeholder: '1', initial: '1' },
+        confirmLabel: 'Suspend',
+        danger: true,
+        onConfirm: (v) => runUserAction(
+          () => api.adminBanUser(id, v === 'infinite' ? 'infinite' : Number(v)),
+          'Account suspended',
+        ),
+      });
+    }
+    if (action === 'delete') {
+      return setPrompt({
+        title: 'Permanently delete this user?',
+        description: 'Their listings, orders and messages go with them. This cannot be undone.',
+        confirmLabel: 'Delete account',
+        danger: true,
+        onConfirm: () => runUserAction(() => api.adminRemoveUser(id), 'Account deleted'),
+      });
+    }
+    return setPrompt({
+      title: 'Set a new password',
+      description: 'The user should change this again after their next sign-in.',
+      input: { label: 'New password', type: 'password', placeholder: 'At least 8 characters' },
+      confirmLabel: 'Set password',
+      onConfirm: (v) => runUserAction(() => api.adminResetUserPass(id, v), 'Password updated'),
+    });
   };
 
   const handleEscrowAction = async (id: string, action: 'release' | 'refund') => {
     try {
       if (action === 'release') await api.adminEscrowRelease(id);
       if (action === 'refund') await api.adminEscrowRefund(id);
-      loadData();
-    } catch (e) {
-      alert("Action failed");
+      await loadData();
+      toast.success(action === 'release' ? 'Funds released to the seller' : 'Order refunded');
+    } catch (e: any) {
+      toast.error('That action failed', { description: e?.message });
     }
   };
 
@@ -401,6 +437,7 @@ export function AdminDashboard() {
           }}
         />
       )}
+      <PromptDialog request={prompt} onClose={() => setPrompt(null)} />
     </main>
   );
 }
@@ -437,9 +474,10 @@ function EditListingModal({ listing, categories, frameworks, onClose, onSave }: 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return alert("Name is required");
-    if (!expiryDate) return alert("Expiry date is required");
-    
+    if (!name.trim()) return toast.error('Name is required');
+    if (!expiryDate) return toast.error('Expiry date is required');
+
+
     setSaving(true);
     try {
       const parsedExpiresAt = new Date(expiryDate).toISOString();
@@ -462,11 +500,16 @@ function EditListingModal({ listing, categories, frameworks, onClose, onSave }: 
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm overflow-y-auto flex items-center justify-center p-4">
-      <div className="bg-bg border border-border-c rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl text-text fade-in" onClick={(e) => e.stopPropagation()}>
+    <Dialog
+      open
+      onClose={onClose}
+      label={`Edit listing ${listing.name}`}
+      panelClassName="bg-bg border border-border-c rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl text-text max-h-[90vh] overflow-y-auto outline-none"
+    >
+      <div>
         <div className="flex justify-between items-center pb-2 border-b border-border-c">
           <h3 className="font-serif text-2xl">Edit Listing · {listing.name}</h3>
-          <button onClick={onClose} className="hairline rounded-lg w-8 h-8 grid place-items-center hover:border-accent"><X size={14} /></button>
+          <button type="button" onClick={onClose} aria-label="Close" className="hairline rounded-lg w-8 h-8 grid place-items-center hover:border-accent"><X size={14} /></button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid sm:grid-cols-2 gap-4">
@@ -528,6 +571,6 @@ function EditListingModal({ listing, categories, frameworks, onClose, onSave }: 
           </div>
         </form>
       </div>
-    </div>
+    </Dialog>
   );
 }
