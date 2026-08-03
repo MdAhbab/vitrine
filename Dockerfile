@@ -41,8 +41,14 @@ COPY docker/entrypoint.sh /entrypoint.sh
 # step. An existing volume is left untouched.
 COPY vitrine.db /app/seed/vitrine.db
 
+# The app runs unprivileged. The container still *starts* as root so the
+# entrypoint can chown the volumes Docker attaches at runtime (including ones
+# created by an earlier root-running image); it drops to this user before
+# exec'ing anything that touches request data. See docker/entrypoint.sh.
 RUN chmod +x /entrypoint.sh \
-    && mkdir -p /data /app/files
+    && mkdir -p /data /app/files \
+    && useradd --system --uid 10001 --user-group --create-home vitrine \
+    && chown -R vitrine:vitrine /data /app/files
 
 EXPOSE 8000
 ENTRYPOINT ["/entrypoint.sh"]

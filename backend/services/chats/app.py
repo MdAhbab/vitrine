@@ -31,6 +31,10 @@ from backend.shared.settings import settings
 from backend.shared.security import Principal, current_user, ai_rate_limit
 
 router = APIRouter(tags=["chats"])
+
+# Newest messages returned per thread. Well beyond any real conversation, but
+# it stops a single long thread from dominating every Inbox poll.
+_MAX_THREAD_MESSAGES = 200
 log = logging.getLogger(__name__)
 
 
@@ -161,10 +165,15 @@ async def list_chats(user: Principal = Depends(current_user),
 async def messages(chat_id: str, user: Principal = Depends(current_user),
                    db: AsyncSession = Depends(get_session)) -> list[MessageOut]:
     await _require_chat(chat_id, user, db)
+    # The Inbox re-polls this every few seconds, so an unbounded read means a
+    # long negotiation re-serialises its entire history on every tick. Take the
+    # newest slice (index-served by ix_chat_messages_chat_created) and flip it
+    # back to chronological order for the UI.
     rows = (await db.execute(
         select(ChatMessage).where(ChatMessage.chat_id == chat_id)
-        .order_by(ChatMessage.created_at))).scalars().all()
-    return [_msg_out(m) for m in rows]
+        .order_by(ChatMessage.created_at.desc())
+        .limit(_MAX_THREAD_MESSAGES))).scalars().all()
+    return [_msg_out(m) for m in reversed(rows)]
 
 
 @router.post("/chats/{chat_id}/messages", response_model=MessageOut)

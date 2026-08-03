@@ -6,7 +6,6 @@ Other services follow this exact shape. See backend.md step-by-step.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from sqlalchemy import select
@@ -21,10 +20,11 @@ from backend.shared.schemas.auth import LoginIn, SignupIn, TokenOut, UserOut, Re
 from backend.shared.security import (
     Principal,
     current_user,
-    hash_password,
+    hash_password_async,
     make_access_token,
     make_refresh_token,
-    verify_password,
+    verify_password_async,
+    verify_password_or_dummy,
     decode_token,
     auth_rate_limit,
 )
@@ -64,7 +64,7 @@ async def signup(body: SignupIn, db: AsyncSession = Depends(get_session)) -> Tok
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
     u = User(
-        email=body.email, password_hash=hash_password(body.password),
+        email=body.email, password_hash=await hash_password_async(body.password),
         display_name=body.display_name, role=body.role,
     )
     db.add(u)
@@ -77,7 +77,11 @@ async def signup(body: SignupIn, db: AsyncSession = Depends(get_session)) -> Tok
 @router.post("/auth/login", response_model=TokenOut, dependencies=[Depends(auth_rate_limit)])
 async def login(body: LoginIn, db: AsyncSession = Depends(get_session)) -> TokenOut:
     u = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
-    if not u or not verify_password(body.password, u.password_hash):
+    # Hash even when the email is unknown: skipping it would make a miss answer
+    # noticeably faster than a hit, turning login into an account-enumeration
+    # oracle for any address an attacker cares to test.
+    ok = await verify_password_or_dummy(body.password, u.password_hash if u else None)
+    if not u or not ok:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
     if is_future(u.banned_until):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Account suspended")
@@ -87,9 +91,13 @@ async def login(body: LoginIn, db: AsyncSession = Depends(get_session)) -> Token
 @router.post("/auth/admin/login", response_model=TokenOut, dependencies=[Depends(auth_rate_limit)])
 async def admin_login(body: LoginIn, db: AsyncSession = Depends(get_session)) -> TokenOut:
     u = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
-    if not u or u.role != "admin" or not verify_password(body.password, u.password_hash):
+    admin = u if u and u.role == "admin" else None
+    ok = await verify_password_or_dummy(body.password, admin.password_hash if admin else None)
+    if not admin or not ok:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid admin credentials")
-    return await _issue(u)
+    if is_future(admin.banned_until):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account suspended")
+    return await _issue(admin)
 
 
 @router.post("/auth/refresh", response_model=TokenOut, dependencies=[Depends(auth_rate_limit)])
@@ -100,6 +108,10 @@ async def refresh(body: RefreshIn, db: AsyncSession = Depends(get_session)) -> T
     u = await db.get(User, claims["sub"])
     if not u:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
+    # A suspended account must not be able to mint fresh access tokens; without
+    # this it kept renewing them for the full 14-day refresh window.
+    if is_future(u.banned_until):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Account suspended")
     return await _issue(u)
 
 
@@ -205,11 +217,11 @@ async def change_password_route(body: ChangePasswordIn, user: Principal = Depend
     u = await db.get(User, user.id)
     if not u:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
-        
-    if not verify_password(body.current_password, u.password_hash):
+
+    if not await verify_password_async(body.current_password, u.password_hash):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Incorrect current password")
-        
-    u.password_hash = hash_password(body.new_password)
+
+    u.password_hash = await hash_password_async(body.new_password)
     db.add(u)
     await db.commit()
     return {"ok": True, "message": "Password changed successfully"}

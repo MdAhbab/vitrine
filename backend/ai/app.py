@@ -32,7 +32,7 @@ from backend.shared.schemas.ai import (
 )
 from backend.shared.schemas.listing import IntakeIn
 from backend.shared.crypto import encrypt_value
-from backend.shared.security import Principal, ai_rate_limit, current_user, hash_password, optional_user, require_role
+from backend.shared.security import Principal, ai_rate_limit, current_user, hash_password_async, optional_user, require_role
 
 from .agents import concierge, feature_estimator, negotiator, pricing, repo_intake
 from .budget import budget
@@ -330,7 +330,7 @@ async def admin_reset_user_pass(user_id: str, body: dict, user: Principal = Depe
     if not u: raise HTTPException(404, "User not found")
     new_pass = body.get("password")
     if not new_pass: raise HTTPException(400, "Password required")
-    u.password_hash = hash_password(new_pass)
+    u.password_hash = await hash_password_async(new_pass)
     db.add(u)
     await db.commit()
     return {"ok": True}
@@ -338,9 +338,10 @@ async def admin_reset_user_pass(user_id: str, body: dict, user: Principal = Depe
 @router.post("/admin/reset-password")
 async def admin_reset_own_pass(body: dict, user: Principal = Depends(require_role("admin")), db: AsyncSession = Depends(get_session)) -> dict:
     u = await db.get(User, user.id)
+    if not u: raise HTTPException(404, "User not found")
     new_pass = body.get("password")
     if not new_pass: raise HTTPException(400, "Password required")
-    u.password_hash = hash_password(new_pass)
+    u.password_hash = await hash_password_async(new_pass)
     db.add(u)
     await db.commit()
     return {"ok": True}

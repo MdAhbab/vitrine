@@ -6,6 +6,7 @@ gateway (verify tokens + enforce roles). See backend.md §10.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -15,6 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .ratelimit import enforce_rate_limit
 from .settings import settings
 from .db import get_session
 from .timeutil import is_future
@@ -28,12 +30,39 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 # ── passwords ──────────────────────────────────────────────────────────
+# The sync pair below burns ~30-60ms of CPU per call by design (that is the
+# point of a KDF). Request handlers MUST use the async wrappers: the server
+# runs a single event loop, so hashing inline stalls *every* concurrent
+# request and SSE stream for that whole window. Keep the sync versions for
+# scripts and tests, which have no loop to block.
 def hash_password(raw: str) -> str:
     return _pwd.hash(raw)
 
 
 def verify_password(raw: str, hashed: str) -> bool:
     return _pwd.verify(raw, hashed)
+
+
+async def hash_password_async(raw: str) -> str:
+    return await asyncio.to_thread(hash_password, raw)
+
+
+async def verify_password_async(raw: str, hashed: str) -> bool:
+    return await asyncio.to_thread(verify_password, raw, hashed)
+
+
+# A real hash of a value nobody can supply. Login compares against this when
+# the email is unknown so a miss costs the same CPU as a hit — otherwise the
+# response time alone tells an attacker which addresses have accounts.
+_DUMMY_HASH = _pwd.hash("vitrine-nonexistent-account-placeholder")
+
+
+async def verify_password_or_dummy(raw: str, hashed: str | None) -> bool:
+    """Constant-work password check that tolerates a missing user."""
+    if not hashed:
+        await verify_password_async(raw, _DUMMY_HASH)
+        return False
+    return await verify_password_async(raw, hashed)
 
 
 # ── tokens ─────────────────────────────────────────────────────────────
@@ -112,9 +141,6 @@ def require_role(*roles: Role):
         return user
 
     return _guard
-
-
-from .ratelimit import enforce_rate_limit
 
 
 def rate_limit(limit: int = 60, window: int = 60, scope: str = "api"):

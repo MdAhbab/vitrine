@@ -7,6 +7,7 @@ cache. Flip DATABASE_URL/EVENT_BUS/CACHE to Postgres+Redis later.
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 
@@ -108,6 +109,17 @@ class Settings(BaseSettings):
         if problems:
             raise RuntimeError(
                 "Refusing to start in ENV=prod:\n  - " + "\n  - ".join(problems)
+            )
+
+        # Not fatal — a directly-exposed server is a legitimate (if unusual)
+        # setup — but behind the shipped nginx it silently breaks rate limiting:
+        # every request then buckets under the proxy's own address, so all
+        # visitors share one counter and any single user can 429 the whole site.
+        if not self.TRUST_PROXY_HEADERS:
+            logging.getLogger("vitrine.settings").warning(
+                "TRUST_PROXY_HEADERS is off in production. If a reverse proxy "
+                "sits in front of this server, rate limits apply to the proxy's "
+                "IP instead of the real client — set TRUST_PROXY_HEADERS=true."
             )
 
     @property

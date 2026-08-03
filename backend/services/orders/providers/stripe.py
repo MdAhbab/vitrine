@@ -1,6 +1,13 @@
-"""Stripe provider — checkout sessions + signed webhook verification."""
+"""Stripe provider — checkout sessions + signed webhook verification.
+
+The `stripe` SDK is synchronous (blocking `requests` under the hood), so every
+call here is pushed onto a worker thread. Calling it inline would park the one
+event loop for a full network round-trip to Stripe, freezing every other
+request, SSE stream and background agent in the process.
+"""
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from fastapi import HTTPException
@@ -29,19 +36,21 @@ class StripeProvider(PaymentProvider):
                 status="paid",
             )
         stripe = self._stripe()
-        session = stripe.checkout.Session.create(
-            mode="payment",
-            line_items=[{
-                "price_data": {
-                    "currency": currency.lower(),
-                    "unit_amount": amount_cents,
-                    "product_data": {"name": f"Vitrine order {order_id}"},
-                },
-                "quantity": 1,
-            }],
-            metadata={"order_id": order_id},
-            success_url=f"{settings.FRONTEND_ORIGIN}/#/dashboard",
-            cancel_url=f"{settings.FRONTEND_ORIGIN}/#/browse",
+        session = await asyncio.to_thread(
+            lambda: stripe.checkout.Session.create(
+                mode="payment",
+                line_items=[{
+                    "price_data": {
+                        "currency": currency.lower(),
+                        "unit_amount": amount_cents,
+                        "product_data": {"name": f"Vitrine order {order_id}"},
+                    },
+                    "quantity": 1,
+                }],
+                metadata={"order_id": order_id},
+                success_url=f"{settings.FRONTEND_ORIGIN}/#/dashboard",
+                cancel_url=f"{settings.FRONTEND_ORIGIN}/#/browse",
+            )
         )
         return CheckoutSession(
             provider_ref=session.id,
@@ -57,8 +66,8 @@ class StripeProvider(PaymentProvider):
         if not sig:
             raise HTTPException(400, "Missing stripe-signature header")
         try:
-            event = stripe.Webhook.construct_event(
-                body, sig, settings.STRIPE_WEBHOOK_SECRET
+            event = await asyncio.to_thread(
+                stripe.Webhook.construct_event, body, sig, settings.STRIPE_WEBHOOK_SECRET
             )
         except Exception as exc:
             raise HTTPException(400, f"Webhook verification failed: {exc}") from exc

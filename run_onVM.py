@@ -162,6 +162,14 @@ def install_docker() -> None:
 
 
 def sync_checkout() -> None:
+    # rsync runs with --delete, so pointing it at the wrong directory would
+    # wipe the deployment and replace it with whatever happens to be in $PWD.
+    # Refuse unless this really looks like a Vitrine checkout.
+    src = Path.cwd()
+    if not DRY and not all((src / m).exists() for m in ("Dockerfile", "backend", "frontend")):
+        die(f"{src} does not look like the Vitrine repo (no Dockerfile/backend/frontend). "
+            "Run this from the repository root.")
+
     info(f"Syncing this checkout to {APP_DIR}...")
     sudo(["mkdir", "-p", str(APP_DIR)])
     sudo([
@@ -182,6 +190,11 @@ def sync_checkout() -> None:
         f"{Path.cwd()}/",
         f"{APP_DIR}/",
     ])
+    # rsync -a preserves the source mode, and a dev-machine .env is usually
+    # world-readable. It carries OPENAI_API_KEY and SECRET_KEY, so do not leave
+    # it readable to every account on the VM.
+    if not DRY and (APP_DIR / ".env").exists():
+        sudo(["chmod", "600", str(APP_DIR / ".env")], check=False)
     ok("Checkout synced.")
 
 
@@ -194,21 +207,41 @@ _PLACEHOLDER_SECRETS = {
 }
 
 
-def _read_env(path: Path) -> dict[str, str]:
+def _read_text_maybe_root(path: Path) -> str:
+    """Read a file that may be root-owned 0600.
+
+    .env.cloud is written with `sudo tee` + chmod 600, so on the second deploy
+    an unprivileged invocation cannot read back what the first one wrote. Fall
+    back to `sudo cat` rather than crashing mid-deploy.
+    """
     if not path.exists():
-        return {}
+        return ""
+    try:
+        return path.read_text()
+    except PermissionError:
+        r = subprocess.run(["sudo", "cat", str(path)], capture_output=True, text=True)
+        return r.stdout if r.returncode == 0 else ""
+
+
+def _read_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
-    for raw in path.read_text().splitlines():
+    for raw in _read_text_maybe_root(path).splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
+        value = value.strip()
+        # Tolerate KEY="value" / KEY='value'; the quotes are not part of the
+        # secret, and treating them as such made a real 48-char SECRET_KEY
+        # look different from the one actually loaded by pydantic-settings.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[key.strip()] = value
     return values
 
 
 def write_env_values(path: Path, values: dict[str, str]) -> None:
-    lines = path.read_text().splitlines() if path.exists() else []
+    lines = _read_text_maybe_root(path).splitlines()
     out: list[str] = []
     seen: set[str] = set()
     for raw in lines:
@@ -243,6 +276,12 @@ def ensure_cloud_env(domain: str) -> None:
         "EVENT_BUS": "memory",
         "CACHE": "memory",
         "FILES_ROOT": "files",
+        # nginx is the only thing that can reach the app container, so the
+        # real client only exists in X-Forwarded-For. Without this the rate
+        # limiter keys every request on nginx's container IP: one shared
+        # bucket for the whole internet, so normal traffic 429s everyone and
+        # no individual abuser is ever throttled.
+        "TRUST_PROXY_HEADERS": "true",
     }
 
     # SECRET_KEY signs every JWT and derives the key-vault encryption key. The
@@ -299,6 +338,9 @@ def nginx_conf(domain: str) -> str:
             add_header X-Frame-Options "SAMEORIGIN" always;
             add_header X-Content-Type-Options "nosniff" always;
             add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+            # Port 80 only ever redirects, so there is no plaintext service to
+            # lock ourselves out of. Stops the first-request downgrade window.
+            add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
             gzip on;
             gzip_vary on;
@@ -514,7 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Vitrine cloud VM deploy (Docker + nginx)")
     ap.add_argument("--dry-run", action="store_true", help="print commands without running them")
     ap.add_argument("--app-dir", default=str(APP_DIR), help="where to sync/run the stack on the VM")
-    ap.add_argument("--domain", default=DEFAULT_DOMAIN, help="public domain (TLS via Let's Encrypt)")
+    ap.add_argument("--domain", default="", help="public domain (TLS via Let's Encrypt); defaults to PUBLIC_DOMAIN in .env.cloud")
     ap.add_argument("--email", default="", help="ACME contact email (defaults to admin@<domain>)")
     ap.add_argument("--seed", action="store_true", help="force re-seed demo data after start")
     ap.add_argument("--no-cache", action="store_true", help="rebuild without Docker layer cache")
@@ -526,14 +568,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("deploy", help="provision + build + start (default)")
     p.add_argument("--seed", action="store_true")
     p.add_argument("--no-cache", action="store_true")
-    p.add_argument("--domain", default=DEFAULT_DOMAIN)
+    p.add_argument("--domain", default="")
     p.add_argument("--email", default="")
     p.set_defaults(func=cmd_deploy)
 
     u = sub.add_parser("update", help="re-sync + rebuild + restart")
     u.add_argument("--seed", action="store_true")
     u.add_argument("--no-cache", action="store_true")
-    u.add_argument("--domain", default=DEFAULT_DOMAIN)
+    u.add_argument("--domain", default="")
     u.add_argument("--email", default="")
     u.set_defaults(func=cmd_update)
 

@@ -24,7 +24,7 @@ router = APIRouter(tags=["reviews"])
 async def list_reviews(listing_id: str, db: AsyncSession = Depends(get_session)) -> list[dict]:
     rows = (await db.execute(
         select(Review).where(Review.listing_id == listing_id)
-        .order_by(Review.created_at.desc()))).scalars().all()
+        .order_by(Review.created_at.desc()).limit(100))).scalars().all()
     return [{"id": r.id, "rating": r.rating, "body": r.body,
              "verified": r.verified_purchase,
              "ts": int(r.created_at.timestamp() * 1000)} for r in rows]

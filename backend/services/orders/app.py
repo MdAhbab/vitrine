@@ -7,10 +7,10 @@ prompts the seller to deliver). Other endpoints are stubbed for Phase 3.
 """
 from __future__ import annotations
 
-import time
+import asyncio
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.shared.db import get_session
@@ -227,7 +227,9 @@ async def get_order(order_id: str, user: Principal = Depends(current_user),
 @router.get("/transactions/ledger")
 async def ledger(user: Principal = Depends(require_role("admin")),
                  db: AsyncSession = Depends(get_session)) -> list[dict]:
-    stmt = select(Order).order_by(Order.created_at.desc())
+    # Newest-first slice: the admin ledger is a review surface, not an export,
+    # and loading every order ever placed grows without bound.
+    stmt = select(Order).order_by(Order.created_at.desc()).limit(500)
     rows = list((await db.execute(stmt)).scalars().all())
     hy = await _hydrate_orders(db, rows)
     out = []
@@ -266,37 +268,58 @@ async def list_payouts(user: Principal = Depends(require_role("seller", "admin")
     } for p in rows]
 
 
+async def _available_payout_cents(db: AsyncSession, seller_id: str) -> int:
+    """Seller balance = lifetime net earnings minus everything already claimed.
+
+    Summed in SQL rather than in Python: a seller with a long order history
+    would otherwise pull every delivered order into memory just to add up two
+    columns. `commission_cents` is the platform's *total* take, so
+    `amount - commission` is exactly the seller's net (see shared/plans.py).
+    """
+    earned = (await db.execute(
+        select(func.coalesce(func.sum(Order.amount_cents - Order.commission_cents), 0))
+        .where(Order.seller_id == seller_id, Order.status == "delivered")
+    )).scalar_one()
+    claimed = (await db.execute(
+        select(func.coalesce(func.sum(Payout.amount_cents), 0))
+        .where(Payout.seller_id == seller_id, Payout.status.in_(["pending", "processed"]))
+    )).scalar_one()
+    return int(earned) - int(claimed)
+
+
+# Serialises the check-then-insert below. Without it two concurrent requests
+# both read the same balance, both pass the check, and both insert a Payout —
+# letting a seller withdraw their balance as many times as they can fire
+# parallel requests. Payout requests are rare, so one global lock is cheap and
+# obviously correct; the same guard protects negotiation starts in chats/app.py.
+_payout_lock = asyncio.Lock()
+
+
 @router.post("/payouts/request")
 async def request_payout(body: PayoutRequestIn,
                          user: Principal = Depends(require_role("seller", "admin")),
                          db: AsyncSession = Depends(get_session)) -> dict:
-    orders_stmt = select(Order).where(Order.seller_id == user.id, Order.status == "delivered")
-    paid_orders = (await db.execute(orders_stmt)).scalars().all()
-    earned_cents = sum(o.amount_cents - o.commission_cents for o in paid_orders)
-    
-    payouts_stmt = select(Payout).where(Payout.seller_id == user.id, Payout.status.in_(["pending", "processed"]))
-    payouts = (await db.execute(payouts_stmt)).scalars().all()
-    payouts_cents = sum(p.amount_cents for p in payouts)
-    
-    available_cents = earned_cents - payouts_cents
-    requested_cents = int(body.amount * 100)
-    
+    requested_cents = int(round(body.amount * 100))
     if requested_cents <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Amount must be greater than zero")
-        
-    if requested_cents > available_cents:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Insufficient balance. Available: {available_cents / 100}")
-        
-    p = Payout(
-        seller_id=user.id,
-        amount_cents=requested_cents,
-        status="pending",
-        payout_method=body.payout_method,
-        payout_details=body.details
-    )
-    db.add(p)
-    await db.commit()
-    await db.refresh(p)
+
+    async with _payout_lock:
+        available_cents = await _available_payout_cents(db, user.id)
+        if requested_cents > available_cents:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Insufficient balance. Available: {available_cents / 100}",
+            )
+        p = Payout(
+            seller_id=user.id,
+            amount_cents=requested_cents,
+            status="pending",
+            payout_method=body.payout_method,
+            payout_details=body.details
+        )
+        db.add(p)
+        await db.commit()
+        await db.refresh(p)
     return {"id": p.id, "status": p.status, "amount": body.amount}
 
 

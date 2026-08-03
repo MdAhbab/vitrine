@@ -17,6 +17,19 @@ from .settings import settings
 
 
 async def _run(drop: bool) -> None:
+    if drop and settings.is_prod:
+        raise SystemExit(
+            "[db_setup] refusing --drop-create with ENV=prod. This deletes every "
+            "table. Unset ENV or run it against a development database."
+        )
+    # The container entrypoint calls --ensure on every boot. On Postgres that
+    # would quietly build the schema from the models and leave Alembic thinking
+    # it had never run, so the next migration applies against tables it did not
+    # create. SQLite has no migration story and this IS its schema setup.
+    if not settings.is_sqlite and settings.is_prod:
+        print("[db_setup] Postgres in prod is managed by Alembic — skipping create_all. "
+              "Run: alembic upgrade head")
+        return
     if drop:
         print("[db_setup] dropping all tables...")
         await drop_all()
