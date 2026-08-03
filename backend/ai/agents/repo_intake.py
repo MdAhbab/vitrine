@@ -16,7 +16,19 @@ async def run(listing_id: str, repo_url: str | None = None,
         user_msg += f"Repository URL: {repo_url}\n"
     if readme_text:
         user_msg += f"Readme Text:\n{readme_text}\n"
-        
+
+    # Without an explicit mandate the model sometimes writes a prose summary
+    # claiming the form was filled while never calling the persist tool, so the
+    # listing stays empty. Name the tool and the keys it must use.
+    user_msg += (
+        "\nYou MUST call `write_listing_fields` with this listing's id before you "
+        "finish — a prose summary alone does not save anything. Use these field "
+        "keys: " + ", ".join(sorted({k.split(".", 1)[-1] for k in ai_fillable_keys()})) +
+        ". Also include `description`, `tagline` and `tags` so the storefront "
+        "listing renders. Omit any field the repository does not evidence; never "
+        "invent one. Only after the tool returns success, summarise what you filled."
+    )
+
     result = await run_agent(
         "repo_intake", SYSTEM, user_msg,
         listing_id=listing_id, trigger="listing.created",
@@ -27,8 +39,15 @@ async def run(listing_id: str, repo_url: str | None = None,
     from backend.shared.models import Listing
     from backend.ai.vectorstore import vector_store
     
+    from sqlalchemy import select
+    from backend.shared.models import ListingField
+
+    fields_written = 0
     async with SessionLocal() as db:
         listing = await db.get(Listing, listing_id)
+        fields_written = len((await db.execute(
+            select(ListingField).where(ListingField.listing_id == listing_id)
+        )).scalars().all())
         if listing:
             text_to_embed = f"{listing.name} {listing.tagline} {listing.description}"
             from backend.ai.tools import embed_text
@@ -38,11 +57,15 @@ async def run(listing_id: str, repo_url: str | None = None,
                     await vector_store.upsert(db, listing_id, emb_res["embedding"])
             except Exception:
                 pass
-                
+
     return {
         "listing_id": listing_id,
         "fillable_fields": ai_fillable_keys(),
         "draft_summary": result.text,
+        # Lets the seller UI tell "enriched" apart from "the agent talked but
+        # saved nothing" instead of both looking like success.
+        "fields_written": fields_written,
+        "enriched": fields_written > 0,
         "needs_seller_confirmation": ["price", "license"],
         "stub": result.stub,
     }

@@ -103,3 +103,15 @@ FIELD_INDEX: dict[str, dict] = {
 
 def ai_fillable_keys() -> list[str]:
     return [k for k, f in FIELD_INDEX.items() if f.get("ai_fill") in ("ai", "ai*")]
+
+
+# key -> owning section, for routing agent-written fields into the right group.
+SECTION_BY_KEY: dict[str, str] = {
+    f["key"]: sec["section"] for sec in FORM_SCHEMA for f in sec["fields"]
+}
+
+# key -> human label, so the Spec Sheet reads "Package manager", not
+# "package_manager".
+FIELD_LABELS: dict[str, str] = {
+    f["key"]: f.get("label", f["key"]) for sec in FORM_SCHEMA for f in sec["fields"]
+}

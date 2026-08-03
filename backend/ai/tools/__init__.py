@@ -18,7 +18,35 @@ from sqlalchemy import select
 from backend.shared.db import SessionLocal
 from backend.shared.models import Listing, ListingField, ListingTier, User, Review, Order, Payout, Subscription, Delivery, ListingEmbedding
 from backend.shared.settings import settings
+from backend.shared.form_schema import SECTION_BY_KEY as _SECTION_BY_KEY
 from backend.ai.vectorstore import vector_store
+
+# Copy that belongs on the Listing row itself, not in the Spec Sheet.
+_LISTING_LEVEL_KEYS = {"name", "tagline", "description", "tags", "category",
+                       "subcategory", "price", "license", "framework"}
+
+# Natural-language variants the models actually emit -> canonical schema keys.
+_FIELD_ALIASES: dict[str, str] = {
+    "problem_statement": "problem", "the_problem": "problem",
+    "target_users": "target_user", "audience": "target_user", "users": "target_user",
+    "outcomes": "outcome", "value_proposition": "outcome",
+    "feature_highlights": "outcome", "features": "outcome",
+    "tech_stack": "stack", "technologies": "stack", "technology_stack": "stack",
+    "languages": "stack", "frameworks": "stack",
+    "architecture_summary": "pattern", "architecture": "pattern",
+    "apis": "api", "endpoints": "api",
+    "db": "database", "databases": "database", "datastore": "database",
+    "data_layer": "orm", "caching": "cache",
+    "unit_tests": "unit", "e2e_tests": "e2e", "testing": "unit",
+    "ci_configured": "ci", "continuous_integration": "ci_cd",
+    "authentication": "auth", "authorization": "auth",
+    "secret_management": "secrets", "env": "env_vars",
+    "environment_variables": "env_vars", "deployment": "hosting",
+    "design": "design_system", "ui_framework": "design_system",
+    "a11y": "accessibility", "state_management": "state",
+    "bundler": "build", "package_mgr": "package_manager",
+    "third_party": "integrations", "integration": "integrations",
+}
 
 @dataclass
 class Tool:
@@ -533,30 +561,43 @@ async def rank_and_section(id: str, score: float) -> dict:
               "fields": {"type": "object"}
           }, "required": ["id", "fields"]})
 async def write_listing_fields(id: str, fields: dict) -> dict:
+    """Persist intake fields to listing_fields AND mirror the headline ones onto
+    the Listing row.
+
+    Two things used to go wrong here:
+      1. Section routing was a hardcoded if/elif over the canonical FORM_SCHEMA
+         keys, but the model emits natural variants (`problem_statement`,
+         `tech_stack`, `architecture_summary`, `target_users`…). Nothing matched,
+         so every field fell through to the "Architecture" default and the Spec
+         Sheet rendered one misfiled blob. Routing now comes from FORM_SCHEMA
+         itself plus an alias table.
+      2. Nothing was written back to the Listing columns the gallery card and
+         product page actually render, so a successful intake still left the
+         listing showing an empty description / stack / tags.
+    """
     async with SessionLocal() as db:
-        for key, value in fields.items():
-            section = "Architecture"
-            if key in ["problem", "target_user", "outcome", "maturity"]:
-                section = "Planning"
-            elif key in ["design_system", "theming", "accessibility"]:
-                section = "Design"
-            elif key in ["stack", "state", "build", "package_manager"]:
-                section = "Development"
-            elif key in ["database", "orm", "cache"]:
-                section = "Data"
-            elif key in ["unit", "e2e", "ci"]:
-                section = "Testing"
-            elif key in ["auth", "secrets"]:
-                section = "Security"
-            elif key in ["hosting", "ci_cd", "demo_url", "env_vars"]:
-                section = "Deployment"
-                
+        listing = await db.get(Listing, id)
+        written: list[str] = []
+
+        for raw_key, value in (fields or {}).items():
+            key = _canonical_field_key(raw_key)
+            # Mirror listing-level copy onto the Listing row, but keep it out of
+            # the Spec Sheet — the product header already renders it.
+            if key in _LISTING_LEVEL_KEYS:
+                if listing is not None:
+                    _mirror_field_onto_listing(listing, raw_key, key, value)
+                continue
+
+            value = _unwrap(value)
+            section = _SECTION_BY_KEY.get(key, _SECTION_BY_KEY.get(raw_key, "Architecture"))
+
             row = (await db.execute(
                 select(ListingField).where(ListingField.listing_id == id, ListingField.key == key)
             )).scalar_one_or_none()
-            
+
             if row:
                 row.value = value
+                row.section = section
                 row.source = "ai"
                 row.confidence = 0.85
             else:
@@ -564,8 +605,86 @@ async def write_listing_fields(id: str, fields: dict) -> dict:
                     listing_id=id, section=section, key=key, value=value,
                     source="ai", confidence=0.85
                 ))
+            written.append(key)
+
+            if listing is not None:
+                _mirror_field_onto_listing(listing, raw_key, key, value)
+
+        if listing is not None:
+            db.add(listing)
         await db.commit()
-        return {"status": "success"}
+        return {"status": "success", "written": written}
+
+
+def _unwrap(value):
+    """Agents sometimes send {"value": X, "confidence": 0.9} instead of X."""
+    if isinstance(value, dict) and "value" in value and set(value) <= {"value", "confidence", "source"}:
+        return value["value"]
+    return value
+
+
+def _as_text(value) -> str:
+    v = _unwrap(value)
+    if isinstance(v, (list, tuple)):
+        return ", ".join(str(x) for x in v if str(x).strip())
+    if isinstance(v, dict):
+        return ", ".join(f"{k}: {x}" for k, x in v.items())
+    return "" if v is None else str(v)
+
+
+def _as_list(value) -> list[str]:
+    v = _unwrap(value)
+    if isinstance(v, (list, tuple)):
+        return [str(x).strip() for x in v if str(x).strip()]
+    if isinstance(v, str):
+        return [p.strip() for p in re.split(r"[,;/|]", v) if p.strip()]
+    return []
+
+
+def _canonical_field_key(raw_key: str) -> str:
+    k = str(raw_key).strip().lower().replace("-", "_").replace(" ", "_")
+    return _FIELD_ALIASES.get(k, k)
+
+
+def _mirror_field_onto_listing(listing, raw_key: str, key: str, value) -> None:
+    """Copy intake output into the Listing columns the storefront renders."""
+    k = str(raw_key).strip().lower().replace("-", "_").replace(" ", "_")
+
+    if k in ("description", "long_description", "summary") and not (listing.description or "").strip():
+        listing.description = _as_text(value)
+    elif k in ("tagline", "short_description", "pitch") and not (listing.tagline or "").strip():
+        listing.tagline = _as_text(value)[:200]
+    elif k in ("tags", "keywords", "topics"):
+        merged = list(dict.fromkeys([*(listing.tags or []), *_as_list(value)]))
+        listing.tags = merged[:12]
+    elif k in ("framework", "primary_framework"):
+        listing.framework = listing.framework or _as_text(value)[:80]
+    elif k in ("stack", "tech_stack", "technologies", "technology_stack"):
+        merged = list(dict.fromkeys([*(listing.tech_stack or []), *_as_list(value)]))
+        listing.tech_stack = merged[:24]
+        if not listing.framework and merged:
+            listing.framework = merged[0][:80]
+    elif k in ("license",):
+        listing.license = listing.license or _as_text(value)[:80]
+    elif k in ("business_model", "monetization", "revenue_model"):
+        bm = dict(listing.business_model or {})
+        if not bm.get("pitch"):
+            bm["pitch"] = _as_text(value)
+        bm.setdefault("kind", "for-profit")
+        bm.setdefault("revenueStreams", [])
+        listing.business_model = bm
+    elif k in ("problem", "problem_statement"):
+        sd = dict(listing.sdlc or {})
+        sd["problem"] = sd.get("problem") or _as_text(value)
+        listing.sdlc = sd
+    elif k in ("solution", "outcome", "feature_highlights", "features"):
+        sd = dict(listing.sdlc or {})
+        sd["solution"] = sd.get("solution") or _as_text(value)
+        listing.sdlc = sd
+    elif k in ("architecture_summary", "architecture", "pattern"):
+        sd = dict(listing.sdlc or {})
+        sd["methodology"] = sd.get("methodology") or _as_text(value)
+        listing.sdlc = sd
 
 @register("submit_verdict", "Approve or flag listing verification",
           {"type": "object", "properties": {

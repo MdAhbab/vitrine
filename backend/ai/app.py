@@ -49,7 +49,16 @@ async def intake(body: IntakeIn, listing_id: str,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
     if listing.owner_id != user.id and user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Forbidden")
-    return await repo_intake.run(listing_id, body.repo_url, body.readme_text)
+    result = await repo_intake.run(listing_id, body.repo_url, body.readme_text)
+    # Re-score once enrichment has landed. Without this the manual intake path
+    # leaves the Vitrine Score at its pre-intake value (completeness 0), while
+    # the event-driven path (workers._on_listing_created) already re-scores.
+    try:
+        from .agents import curation
+        result["vitrine_score"] = (await curation.run(listing_id)).get("vitrine_score")
+    except Exception as exc:  # scoring must never fail the intake response
+        print(f"[ai] post-intake curation failed: {exc}")
+    return result
 
 
 @router.post("/ai/concierge", dependencies=[Depends(ai_rate_limit)])

@@ -146,7 +146,8 @@ async def run_agent(agent: str, system: str, user_msg: str, *,
                 output = await invoke(tc_name, tc_args)
             except Exception as e:
                 output = {"error": str(e)}
-                
+                print(f"[agent:{agent}] tool {tc_name} failed: {e}")
+
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc_id,
