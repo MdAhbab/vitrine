@@ -27,6 +27,9 @@ GROUP = "vitrine-workers"
 DEAD_LETTER_STREAM = "vitrine:events:dead"
 # Redeliveries tolerated before an event is dead-lettered (AGENTS.md §7).
 MAX_DELIVERIES = 3
+# How long a message may sit unacked with a dead consumer before another worker
+# claims it. Comfortably longer than any normal handler run.
+ORPHAN_IDLE_MS = 60_000
 
 
 def make_event(type_: str, payload: dict, *, actor: str = "system",
@@ -119,10 +122,17 @@ class _RedisBus:
 
     async def _handle(self, r, msg_id: str, fields: dict) -> None:
         payload = fields.get("data", "")
+        # Structural validation, not just parseability. Valid JSON of the wrong
+        # shape (a scalar, or an object with no `type`) would otherwise raise
+        # further down, outside every ack path — and because the consumer now
+        # reclaims its own unacked backlog, that message would be retried
+        # forever instead of merely being stuck. Retrying cannot fix shape.
         try:
             event = json.loads(payload)
+            if not isinstance(event, dict):
+                raise TypeError(f"expected an object, got {type(event).__name__}")
+            event_type = event["type"]
         except Exception as exc:
-            # Unparseable: retrying cannot help.
             await self._dead_letter(r, msg_id, payload, f"malformed envelope: {exc}")
             return
 
@@ -134,7 +144,7 @@ class _RedisBus:
         # Run every handler, collecting failures. `_safe` swallows exceptions so
         # one failing handler cannot prevent the others from running.
         failures = [exc for exc in
-                    [await _safe(h, event) for h in self._handlers_for(event["type"])]
+                    [await _safe(h, event) for h in self._handlers_for(event_type)]
                     if exc is not None]
 
         if not failures:
@@ -159,15 +169,35 @@ class _RedisBus:
             await self._dead_letter(r, msg_id, payload, reason)
         else:
             _log.warning("[eventbus] handler failure on %s (attempt %d/%d): %s",
-                         event.get("type"), deliveries, MAX_DELIVERIES, reason)
+                         event_type, deliveries, MAX_DELIVERIES, reason)
+
+    async def _reclaim_orphans(self, r, consumer: str) -> None:
+        """Take over messages abandoned by a consumer that died holding them.
+
+        Consumer names are per-process, so without this a crashed worker's
+        unacked entries stay pending against a name that never comes back and no
+        one ever retries them.
+        """
+        try:
+            _next, messages, _deleted = await r.xautoclaim(
+                STREAM, GROUP, consumer, min_idle_time=ORPHAN_IDLE_MS, count=10)
+        except Exception:
+            # Older Redis (<6.2) has no XAUTOCLAIM; degrade rather than spin.
+            return
+        for msg_id, fields in messages or []:
+            _log.warning("[eventbus] reclaimed orphaned message %s", msg_id)
+            try:
+                await self._handle(r, msg_id, fields)
+            except Exception:
+                _log.exception("[eventbus] consumer error on reclaimed %s", msg_id)
 
     async def _consume_loop(self) -> None:
         r = await self._client()
         consumer = f"worker-{uuid.uuid4().hex[:8]}"
         while True:
             try:
-                # ">" delivers new messages; "0" reclaims this consumer's own
-                # unacked backlog so retries actually happen after a failure.
+                # ">" delivers new messages; "0" re-reads this consumer's own
+                # unacked backlog so a failed handler actually gets retried.
                 for start_id in (">", "0"):
                     rows = await r.xreadgroup(GROUP, consumer, {STREAM: start_id},
                                               count=10, block=2000 if start_id == ">" else 0)
@@ -177,6 +207,7 @@ class _RedisBus:
                                 await self._handle(r, msg_id, fields)
                             except Exception:
                                 _log.exception("[eventbus] consumer error on %s", msg_id)
+                await self._reclaim_orphans(r, consumer)
             except asyncio.CancelledError:
                 break
             except Exception:

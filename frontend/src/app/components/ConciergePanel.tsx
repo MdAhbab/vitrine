@@ -74,13 +74,17 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
     });
   }
 
-  async function sendLive(q: string) {
+  // Takes its own signal rather than reading abortRef: by the time a cancelled
+  // stream finishes unwinding, the ref may already point at a NEWER request, so
+  // checking the ref would report "not aborted" and let the dead stream write
+  // into the new request's message bubble.
+  async function sendLive(q: string, signal: AbortSignal) {
     let acc = '';
     let resultSlugs: Product[] = [];
     setMessages((m) => [...m, { role: 'assistant', text: '' }]);
 
     await conciergeStream(q, (chunk) => {
-      if (abortRef.current?.signal.aborted) return;
+      if (signal.aborted) return;
       if (chunk.type === 'token' && chunk.text) {
         acc += chunk.text;
         setMessages((m) => {
@@ -145,7 +149,7 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
           return next;
         });
       }
-    }, abortRef.current?.signal);
+    }, signal);
   }
 
   async function send(q: string) {
@@ -164,15 +168,20 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
       if (USE_MOCKS) {
         await sendMock(q);
       } else {
-        await sendLive(q);
+        await sendLive(q, controller.signal);
       }
     } catch (e) {
       if (controller.signal.aborted) return;
       toast.error(e instanceof Error ? e.message : 'Concierge unavailable');
       setMessages((m) => [...m, { role: 'assistant', text: 'Sorry — I could not reach the concierge service. Try again shortly.' }]);
     } finally {
-      if (abortRef.current === controller) abortRef.current = null;
-      setStreaming(false);
+      // Only the newest request may clear the streaming flag. A superseded one
+      // finishing late would otherwise re-enable Send while a live stream is
+      // still running, letting a third overlapping request start.
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setStreaming(false);
+      }
     }
   }
 

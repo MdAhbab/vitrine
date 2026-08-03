@@ -73,6 +73,24 @@ def _spawn_agent_reply(chat_id: str) -> None:
     task.add_done_callback(_reply_tasks.discard)
 
 
+async def drain_agent_replies(timeout: float = 10.0) -> None:
+    """Let in-flight AI replies finish before the process goes away.
+
+    These tasks write a chat message at the end of a model call. Tearing the
+    loop down underneath one loses the reply the buyer is waiting on and leaves
+    aiosqlite's worker thread calling into a closed loop.
+    """
+    pending = [t for t in _reply_tasks if not t.done()]
+    if not pending:
+        return
+    done, still_running = await asyncio.wait(pending, timeout=timeout)
+    for task in still_running:
+        task.cancel()
+    if still_running:
+        await asyncio.gather(*still_running, return_exceptions=True)
+    log.info("drained %d agent reply task(s)", len(done) + len(still_running))
+
+
 async def _trigger_agent_reply(chat_id: str) -> None:
     if chat_id in _active_agent_replies:
         return

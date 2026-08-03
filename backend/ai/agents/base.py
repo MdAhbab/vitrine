@@ -137,8 +137,10 @@ async def run_agent(agent: str, system: str, user_msg: str, *,
     model_used = ""
 
     # One turn per retry, plus the initial call. Previously a magic `range(5)`
-    # that ignored the only knob AGENTS.md §8 documents for this.
-    max_turns = 1 + max(1, settings.AGENT_MAX_RETRIES)
+    # that ignored the only knob AGENTS.md §8 documents for this. Uses the same
+    # `max(0, ...)` floor as run_json so AGENT_MAX_RETRIES=0 means "no retries"
+    # in both paths; the for/else below still forces a final tool-free answer.
+    max_turns = 1 + max(0, settings.AGENT_MAX_RETRIES)
 
     try:
         for _turn in range(max_turns):

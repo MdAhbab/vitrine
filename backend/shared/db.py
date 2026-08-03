@@ -6,6 +6,7 @@ portable column types (String, Integer, Boolean, DateTime, JSON, Text).
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
@@ -16,6 +17,9 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from .settings import settings
+
+
+_log = logging.getLogger("vitrine.db")
 
 
 class Base(DeclarativeBase):
@@ -82,6 +86,53 @@ async def ensure_schema() -> None:
         await create_all()
     else:
         await _sqlite_additive_columns()
+    await _backfill_platform_take()
+
+
+async def _backfill_platform_take() -> None:
+    """Bring pre-existing orders onto the current `commission_cents` meaning.
+
+    `commission_cents` is the platform's total take, and every reader derives
+    the seller's net as `amount_cents - commission_cents`. Orders written before
+    that was fixed recorded only the plan commission and omitted the buyer's
+    processing markup, so a mixed table would blend two meanings in one column
+    and quietly overstate historical seller earnings.
+
+    Deliberately conservative: a row is rewritten only when its stored value
+    matches the old formula *exactly* for that seller's plan. Anything already
+    correct, or that does not reconcile, is left untouched. Idempotent — a
+    second run finds the new value and matches nothing.
+    """
+    from sqlalchemy import select
+
+    from .models import Order, User
+    from .plans import PROCESSING_PCT, commission_cents
+
+    try:
+        async with SessionLocal() as db:
+            orders = (await db.execute(select(Order))).scalars().all()
+            if not orders:
+                return
+            plans = {
+                u.id: (u.plan, bool(u.is_student))
+                for u in (await db.execute(select(User))).scalars().all()
+            }
+            fixed = 0
+            for o in orders:
+                plan, is_student = plans.get(o.seller_id, ("free", False))
+                base = round(o.amount_cents / (1 + PROCESSING_PCT / 100))
+                markup = o.amount_cents - base
+                plan_cut = commission_cents(base, plan, is_student and plan == "free")
+                if o.commission_cents == plan_cut and markup:
+                    o.commission_cents = plan_cut + markup
+                    db.add(o)
+                    fixed += 1
+            if fixed:
+                await db.commit()
+                _log.info("backfilled platform take on %d legacy order(s)", fixed)
+    except Exception:
+        # Never block startup on a bookkeeping migration.
+        _log.exception("platform-take backfill failed")
 
 
 async def _sqlite_additive_columns() -> None:
@@ -120,8 +171,14 @@ async def _sqlite_additive_columns() -> None:
         for stmt in alters:
             try:
                 await conn.execute(text(stmt))
-            except Exception:
-                pass  # column already exists
+            except Exception as exc:
+                # "already exists" is the expected, boring case on every boot
+                # after the first. Anything else (a lock timeout, a disk error,
+                # a typo in a future statement) must not vanish silently — an
+                # index that never got created would otherwise be invisible.
+                if "duplicate column" in str(exc).lower() or "already exists" in str(exc).lower():
+                    continue
+                _log.warning("schema step failed: %s -> %s", stmt.split("(")[0].strip(), exc)
 
 
 async def drop_all() -> None:

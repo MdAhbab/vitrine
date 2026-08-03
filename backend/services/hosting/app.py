@@ -7,9 +7,12 @@ Phase 2/4 (see backend.md §14 managed preview hosting).
 """
 from __future__ import annotations
 
+import asyncio
+import ipaddress
+import socket
 from urllib.parse import urlparse
-import httpx
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI
 
 from backend.shared.security import rate_limit
@@ -33,6 +36,35 @@ def _host_allowed(url: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in settings.allowed_preview_hosts)
 
 
+async def _resolves_to_public_ip(url: str) -> bool:
+    """Reject an allow-listed hostname that resolves somewhere private.
+
+    The allow-list is a string match on the hostname, and preview hosts are
+    user-controlled subdomains (`anything.vercel.app`). Without this, an
+    attacker points their own allowed-suffix hostname at 169.254.169.254 or an
+    RFC1918 address and the allow-list waves it straight through.
+    """
+    host = urlparse(url).hostname
+    if not host:
+        return False
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host, None, proto=socket.IPPROTO_TCP)
+    except Exception:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
 @router.get("/hosting/validate", dependencies=[Depends(_hosting_rate_limit)])
 async def validate(url: str) -> dict:
     return {"url": url, "allowed": _host_allowed(url)}
@@ -50,6 +82,9 @@ async def health_check(url: str) -> dict:
         async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
             target = url
             for _ in range(_MAX_REDIRECTS + 1):
+                if not await _resolves_to_public_ip(target):
+                    return {"url": url, "health": "down",
+                            "reason": "host does not resolve to a public address"}
                 res = await client.get(target)
                 if not res.is_redirect:
                     if res.is_success:

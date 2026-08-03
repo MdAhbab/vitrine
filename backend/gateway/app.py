@@ -54,7 +54,13 @@ async def lifespan(app: FastAPI):
         from backend.shared.events import bus
         if hasattr(bus, "start_consumer"):
             await bus.start_consumer()
-    yield
+    try:
+        yield
+    finally:
+        # Fire-and-forget AI replies end in a DB write. Let them land instead of
+        # dropping a buyer's negotiation message on every restart/deploy.
+        from backend.services.chats.app import drain_agent_replies
+        await drain_agent_replies()
 
 
 app = FastAPI(title="Vitrine API Gateway", version="0.1.0", lifespan=lifespan)

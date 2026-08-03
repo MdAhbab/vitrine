@@ -46,4 +46,12 @@ RUN chmod +x /entrypoint.sh \
 
 EXPOSE 8000
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["gunicorn", "backend.gateway.app:app", "-k", "uvicorn.workers.UvicornWorker", "-w", "2", "-b", "0.0.0.0:8000", "--timeout", "120", "--graceful-timeout", "30"]
+# ONE worker, deliberately. With EVENT_BUS=memory and CACHE=memory (the settings
+# baked in above) every piece of shared state lives in-process: the event bus,
+# the AI result cache, the daily spend cap, and the rate limiter. A second
+# worker does not scale those — it forks them, so the OPENAI_DAILY_LIMIT_USD
+# kill-switch and every rate limit silently double, cache hits halve, and two
+# processes contend for the same SQLite file. FastAPI is async, so one worker
+# already serves concurrent requests. Raise this only after moving the bus and
+# cache to Redis (EVENT_BUS=redis, CACHE=redis).
+CMD ["gunicorn", "backend.gateway.app:app", "-k", "uvicorn.workers.UvicornWorker", "-w", "1", "-b", "0.0.0.0:8000", "--timeout", "120", "--graceful-timeout", "30"]

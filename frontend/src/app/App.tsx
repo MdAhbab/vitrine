@@ -118,9 +118,13 @@ export default function App() {
     if (route.name === 'concierge') setConcierge(true);
   }, [route.name]);
 
+  // Escape is handled by the Dialog primitive itself, which every overlay now
+  // uses — including the ones this window listener never covered (Concierge,
+  // ListingEditor, OrderDetail). This handler stays only as the fallback for a
+  // keypress that lands on the body rather than inside a dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setPreviewing(null); setBargain(null); setFeatures(null); setCheckout(null); }
+      if (e.key === 'Escape') { setPreviewing(null); setBargain(null); setFeatures(null); setCheckout(null); setConcierge(false); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
