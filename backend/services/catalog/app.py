@@ -24,6 +24,7 @@ from backend.shared.plans import listing_limit
 _ACTIVE_LISTING_STATUSES = ("draft", "enriching", "review", "live", "flagged", "paused")
 from backend.shared.schemas.listing import IntakeIn, ListingCreateIn, ProductOut, AnalyticsEventIn, SellerAnalyticsOut, AdminAnalyticsOut
 from backend.shared.security import Principal, current_user, require_role, optional_user, ai_rate_limit
+from backend.shared.timeutil import is_past
 
 
 from .serializers import to_product
@@ -145,8 +146,9 @@ async def get_listing(slug: str, db: AsyncSession = Depends(get_session),
     listing = (await db.execute(select(Listing).where(Listing.slug == slug))).scalar_one_or_none()
     if not listing:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
-    now = datetime.now(timezone.utc)
-    is_expired = listing.expires_at is not None and listing.expires_at < now
+    # `expires_at` comes back naive from SQLite — compare via the tz-safe helper
+    # or this 500s for every visitor once a listing has been reposted.
+    is_expired = is_past(listing.expires_at)
     if listing.status != "live" or is_expired:
         is_owner = user and listing.owner_id == user.id
         is_admin = user and user.role == "admin"

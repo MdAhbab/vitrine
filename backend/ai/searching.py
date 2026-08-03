@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import re
 
 from sqlalchemy import select
@@ -139,7 +140,13 @@ async def search_listings(
     effective_price_max = price_max if price_max is not None else parsed.price_max
     effective_has_demo = has_demo if has_demo is not None else parsed.has_demo
 
-    stmt = select(Listing).where(Listing.status == "live")
+    # Mirror GET /listings: an expired listing is not buyable, so it must not be
+    # recommended by search or grounded into a Concierge answer either.
+    now = datetime.now(timezone.utc)
+    stmt = select(Listing).where(
+        Listing.status == "live",
+        (Listing.expires_at == None) | (Listing.expires_at > now),  # noqa: E711
+    )
     if category:
         stmt = stmt.where(Listing.category == category)
     if effective_price_max is not None:

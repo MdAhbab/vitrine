@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .settings import settings
 from .db import get_session
+from .timeutil import is_future
 
 Role = Literal["buyer", "seller", "admin"]
 
@@ -79,9 +80,9 @@ async def current_user(
     u = await db.get(User, claims["sub"])
     if not u:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found")
-    if u.banned_until and u.banned_until > datetime.now(timezone.utc):
+    if is_future(u.banned_until):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Account suspended")
-        
+
     return Principal(u.id, u.role)
 
 
@@ -97,7 +98,7 @@ async def optional_user(
             return None
         from .models import User
         u = await db.get(User, claims["sub"])
-        if not u or (u.banned_until and u.banned_until > datetime.now(timezone.utc)):
+        if not u or is_future(u.banned_until):
             return None
         return Principal(u.id, u.role)
     except Exception:

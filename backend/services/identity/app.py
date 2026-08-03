@@ -16,6 +16,7 @@ from backend.shared.db import get_session
 from backend.shared.events import bus
 from backend.shared.models import User
 from backend.shared.settings import settings
+from backend.shared.timeutil import is_future
 from backend.shared.schemas.auth import LoginIn, SignupIn, TokenOut, UserOut, RefreshIn, ProfileUpdateIn, ChangePasswordIn
 from backend.shared.security import (
     Principal,
@@ -78,7 +79,7 @@ async def login(body: LoginIn, db: AsyncSession = Depends(get_session)) -> Token
     u = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
     if not u or not verify_password(body.password, u.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
-    if u.banned_until and u.banned_until > datetime.now(timezone.utc):
+    if is_future(u.banned_until):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Account suspended")
     return await _issue(u)
 
