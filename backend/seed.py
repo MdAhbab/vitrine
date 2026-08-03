@@ -40,7 +40,7 @@ from backend.shared.models import (
 from backend.shared.security import hash_password
 from backend.ai.client import client
 
-SEED_VERSION = "7"
+SEED_VERSION = "8"
 DEMO_URL = "https://nextgram.vercel.app"
 
 COVER = "https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=1600&q=80"
@@ -208,7 +208,12 @@ DEFAULT_CONFIG = {
 async def _add_listing(db, owner_id: str, spec: tuple) -> Listing:
     name, tagline, cat, price, fw, score, tags, cover_key, desc, _seller = spec
     cover_url = COVERS.get(cover_key, COVER)
-    expires = datetime.now(timezone.utc) + timedelta(days=30)
+    # Demo listings are evergreen (NULL = never expires). The seeded vitrine.db
+    # is committed and shipped, so a fixed `now + 30 days` stamp meant the whole
+    # gallery silently emptied out 30 days after whoever last ran the seed —
+    # GET /listings filters on `expires_at > now`. "Quiet Hours" stays expired on
+    # purpose: it is the fixture that demonstrates the expiry/repost flow.
+    expires = None
     if name == "Quiet Hours":
         expires = datetime.now(timezone.utc) - timedelta(days=5)
     listing = Listing(
