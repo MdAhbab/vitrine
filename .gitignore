@@ -165,3 +165,17 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# FUSE leftovers: when a file is deleted while a process still holds it open,
+# the mount renames it to .fuse_hidden*. Orphaned SQLite -shm/-wal files land
+# here and would otherwise sit in `git status` forever.
+.fuse_hidden*
+
+# Business/commercial documents stay OUT of the repo — they are shared
+# deliberately, not carried along with the source.
+*.docx
+*.pptx
+*.xlsx
+*.doc
+*.ppt
+*.xls
