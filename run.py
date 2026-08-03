@@ -22,8 +22,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import textwrap
-import platform
 import shutil
 import signal
 import socket
@@ -108,7 +106,14 @@ def env_value(key: str, default: str) -> str:
         for raw in ENV_FILE.read_text().splitlines():
             line = raw.strip()
             if line.startswith(key + "="):
-                return line.split("=", 1)[1].strip()
+                value = line.split("=", 1)[1].strip()
+                # Strip surrounding quotes. Without this a perfectly valid
+                # DATABASE_URL="sqlite+aiosqlite:///./vitrine.db" fails the
+                # startswith("sqlite") test, and the launcher tries to run the
+                # Postgres/Alembic bootstrap against a SQLite file.
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                return value
     return default
 
 

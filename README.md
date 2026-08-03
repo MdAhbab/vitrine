@@ -409,9 +409,10 @@ $10 + 1–2 days demands a **cheap-but-capable** model and **ruthless cost contr
 
 - **`SECRET_KEY` is mandatory in production.** It signs every JWT *and* derives the encryption key for the admin API-key vault, so the default placeholder would allow forged admin tokens and decryptable stored keys. `ENV=prod` refuses to boot without a real one; `run_onVM.py` generates it on first deploy and never rotates it afterwards (rotating it invalidates live sessions and makes stored keys undecryptable).
 - **Rotate the seeded demo accounts before exposing a deployment.** The shipped `vitrine.db` is seeded for the demo, and those logins are published in [backend.md](./backend.md) — they are a convenience for local evaluation, not credentials for a public instance.
-- **AuthN/Z:** JWT access/refresh, RBAC (`buyer` / `developer` / `admin`), short-lived tokens.
+- **AuthN/Z:** JWT access/refresh, RBAC (`buyer` / `developer` / `admin`), short-lived tokens. Password hashing runs off the event loop, and a login for an unknown address does the same work as one for a known address so response time cannot be used to enumerate accounts.
 - **Input validation:** Pydantic schemas at every boundary; strict CORS; request size limits.
-- **Rate limiting & abuse control:** Redis token-bucket per IP/user; agent budget caps.
+- **Rate limiting & abuse control:** token-bucket per client IP (in-memory by default, Redis when `CACHE=redis`); agent budget caps. **Behind a reverse proxy you must set `TRUST_PROXY_HEADERS=true`** — otherwise every request buckets under the proxy's own address, so all visitors share one counter and any single user can rate-limit the whole site. `run_onVM.py` sets it automatically; a production boot without it logs a warning.
+- **The app container runs unprivileged.** It starts as root only long enough for the entrypoint to take ownership of the mounted volumes, then drops to a dedicated non-root user before serving anything.
 - **Sandboxed previews:** embedded demos run in `<iframe sandbox>` with a strict **CSP**; no access to parent; preview URLs validated/allow-listed (`*.vercel.app` + Vitrine-managed domains).
 - **Payments:** mock provider behind a `PaymentProvider` interface; **Stripe-ready** with signed webhooks; no card data touches Vitrine.
 - **Secrets:** `.env` locally, environment/secret store on the VM; never committed; `OPENAI_API_KEY` server-side only.
@@ -425,7 +426,7 @@ $10 + 1–2 days demands a **cheap-but-capable** model and **ruthless cost contr
 
 | Layer | Choice |
 |---|---|
-| Frontend | **React + Vite + TypeScript + Tailwind CSS**, Framer Motion, TanStack Query, Zustand |
+| Frontend | **React 18 + Vite + TypeScript + Tailwind CSS**, Motion, Zustand, Recharts, Embla, Sonner |
 | Backend | **FastAPI** (Python 3.11+), Pydantic v2, SQLAlchemy 2.0, Alembic |
 | Data | **SQLite + in-memory bus/cache now**, PostgreSQL + pgvector and Redis later |
 | AI | **OpenAI** `gpt-4o-mini`, `text-embedding-3-small`, tool calling, vision, embeddings |
@@ -440,19 +441,34 @@ $10 + 1–2 days demands a **cheap-but-capable** model and **ruthless cost contr
 
 ```
 vitrine/
-├── README.md              ← this file (master plan)
-├── AGENTS.md              ← agent roster, tools, memory, workflows
-├── backend.md             ← backend architecture, data model, deploy
-├── run.py                 ← local dev orchestration (services + Vite, localhost only)
-├── run_onVM.py            ← Docker cloud VM deploy (Compose + nginx auto-TLS)
-├── Dockerfile             ← full app image (Vite build + FastAPI gateway + seeded DB)
+├── README.md                  ← this file (master plan)
+├── AGENTS.md                  ← agent roster, tools, memory, workflows
+├── backend.md                 ← backend architecture, data model, deploy
+├── run.py                     ← local dev orchestration (services + Vite, localhost only)
+├── run_onVM.py                ← Docker cloud VM deploy (Compose + nginx auto-TLS)
+├── Dockerfile                 ← full app image (Vite build + FastAPI gateway + seeded DB)
+├── docker/entrypoint.sh       ← seeds /data, drops root, then execs the server
 ├── .env.example
+├── vitrine.db                 ← seeded demo database, committed on purpose
+├── files/                     ← uploaded media (listings, avatars, chats, documents)
 ├── backend/
-│   ├── gateway/           ├── services/{identity,catalog,search,
-│   ├── ai/   (agent fleet)│            orders,notifications,hosting,reviews}
-│   ├── shared/ (db, events, schemas, security)
-│   └── requirements.txt
-└── frontend/              ← React + Vite + Tailwind HCD storefront
+│   ├── gateway/app.py         ← the one process that runs in prod: mounts every router,
+│   │                            serves the built SPA, owns startup/shutdown
+│   ├── ai/
+│   │   ├── agents/            ← the seven agents (base.py holds the tool loop)
+│   │   ├── tools/             ← the shared typed tool catalogue
+│   │   ├── client.py          ← OpenAI + Gemini fallback, timeouts, concurrency cap
+│   │   ├── budget.py · vectorstore.py · searching.py · workers.py
+│   ├── services/              ← identity · catalog · search · orders · notifications
+│   │                            hosting · reviews · chats · media
+│   │   └── orders/providers/  ← payment adapters (mock · stripe)
+│   ├── shared/                ← db · models · events · schemas · security · plans
+│   │                            settings · cache · ratelimit · storage · crypto
+│   ├── migrations/            ← Alembic (Postgres path)
+│   ├── tests/                 ← pytest suite
+│   ├── seed.py · requirements.txt · pytest.ini · alembic.ini
+└── frontend/
+    └── src/app/               ← components · pages · lib (api · store · theme)
 ```
 
 ---

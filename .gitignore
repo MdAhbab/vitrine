@@ -75,10 +75,20 @@ web_modules/
 .venv_*/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
 
 # Database: the seeded vitrine.db IS committed on purpose (so `git pull` on the
 # VM ships a ready-to-run, seeded database). Only the volatile SQLite sidecars
 # and the empty stray backend copy are ignored.
+#
+# The app runs in WAL mode, so recent writes can live in vitrine.db-wal rather
+# than vitrine.db itself. Those sidecars are ignored here — meaning a commit
+# taken while a WAL is outstanding can ship a database missing its newest
+# pages. Before re-committing the seed, stop the app and checkpoint it:
+#     python -c "import sqlite3;sqlite3.connect('vitrine.db').execute('PRAGMA wal_checkpoint(TRUNCATE)')"
 *.db-wal
 *.db-shm
 /backend/vitrine.db
