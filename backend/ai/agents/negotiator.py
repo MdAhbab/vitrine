@@ -5,6 +5,8 @@ the authorized budget, references the buyer's brief. See AGENTS.md (negotiator).
 """
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import select
 
 from backend.shared.db import SessionLocal
@@ -16,6 +18,25 @@ SYSTEM = system_prompt_for("Buyer Representative Agent",
                            "You are the buyer's negotiating rep. Warm but firm. Never exceed budget.")
 
 
+_PLACEHOLDER_RE = re.compile(r"\[(?:your|seller|buyer|product|company|recipient)[^\]]{0,30}\]", re.I)
+
+
+def _strip_placeholders(text: str, seller_name: str, rep_name: str) -> str:
+    """Belt-and-braces for the prompt rule above.
+
+    A model that still slips a "[Your Name]" through would otherwise post it into
+    a thread the seller reads, so substitute the names we already know and drop
+    the leftover mail-merge scaffolding.
+    """
+    if not text:
+        return text
+    out = re.sub(r"(?im)^\s*subject:.*$\n?", "", text)
+    out = re.sub(r"\[(?:your name|my name|rep name)[^\]]{0,20}\]", rep_name, out, flags=re.I)
+    out = re.sub(r"\[(?:seller'?s? name|recipient'?s? name)[^\]]{0,20}\]", seller_name, out, flags=re.I)
+    out = _PLACEHOLDER_RE.sub("", out)
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
 async def next_message(chat_id: str) -> dict:
     async with SessionLocal() as db:
         chat = await db.get(Chat, chat_id)
@@ -24,7 +45,12 @@ async def next_message(chat_id: str) -> dict:
         nego = (await db.execute(
             select(Negotiation).where(Negotiation.chat_id == chat_id))).scalar_one_or_none()
         buyer = await db.get(User, chat.buyer_id)
-        
+        seller = await db.get(User, chat.seller_id)
+        buyer_name = (buyer.display_name if buyer else "") or "the buyer"
+        seller_name = (seller.display_name if seller else "") or "there"
+        rep_name = f"{buyer_name}'s AI Rep"
+
+
         # Fetch buyer's past orders
         orders_stmt = select(Order).where(Order.buyer_id == chat.buyer_id)
         orders = (await db.execute(orders_stmt)).scalars().all()
@@ -55,7 +81,8 @@ async def next_message(chat_id: str) -> dict:
         context = nego.buyer_readme_context if nego else ""
         
         prompt = (
-            f"You are negotiating on behalf of the buyer {buyer.display_name if buyer else 'Buyer'}.\n"
+            f"You are negotiating on behalf of the buyer {buyer_name}.\n"
+            f"You are writing to the seller, {seller_name}. You sign as \"{rep_name}\".\n"
             f"Buyer constraints & target: Authorized Max Budget is ${budget}.\n"
             f"Product Context:\n{listing_details}\n"
             f"Buyer's Custom Product Context/Readme Brief:\n{context}\n"
@@ -63,14 +90,20 @@ async def next_message(chat_id: str) -> dict:
             f"Conversation History:\n{history_text}\n\n"
             f"Draft the next negotiation message to the seller. Disclose clearly that you are the buyer's AI Representative. "
             f"Be warm but firm. Propose a specific price offer or custom milestone terms that are within the budget and align with the context. "
-            f"Do not exceed the authorized budget of ${budget} under any circumstances."
+            f"Do not exceed the authorized budget of ${budget} under any circumstances.\n"
+            # The model was shipping literal "Dear [Seller's Name]" / "My name is
+            # [Your Name]" straight into seller-visible threads.
+            f"Write the finished message only. Address the seller as {seller_name} and sign as {rep_name}. "
+            f"NEVER emit bracketed placeholders such as [Your Name], [Seller's Name] or [Product] — "
+            f"every name you need is given above. Do not include a subject line."
         )
         
         result = await run_agent("negotiator", SYSTEM, prompt, trigger="api")
 
         msg = ChatMessage(chat_id=chat_id, sender_id="agent",
-                          sender_name=f"{buyer.display_name if buyer else 'Buyer'}'s AI Rep",
-                          text=result.text, is_agent_rep=True)
+                          sender_name=rep_name,
+                          text=_strip_placeholders(result.text, seller_name, rep_name),
+                          is_agent_rep=True)
         chat.unread_for = ["seller"]
         db.add(msg)
         await db.commit()
