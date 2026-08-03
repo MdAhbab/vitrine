@@ -5,6 +5,7 @@ import { useStore, activeRepsForBuyer, type Listing, type Transaction } from '..
 import { Inbox } from '../../components/Inbox';
 import { OrderDetail } from '../../components/OrderDetail';
 import { PreviewFrame } from '../../components/PreviewFrame';
+import { PromptDialog, type PromptRequest } from '../../components/PromptDialog';
 
 export function BuyerDashboard() {
   const { user, transactions, threads, deactivateRep, listings } = useStore(
@@ -16,6 +17,7 @@ export function BuyerDashboard() {
   const [tab, setTab] = useState<'overview' | 'library' | 'orders' | 'reps' | 'messages'>('overview');
   const [openOrder, setOpenOrder] = useState<Transaction | null>(null);
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
+  const [prompt, setPrompt] = useState<PromptRequest | null>(null);
   // Guard AFTER all hooks — an early return above them violates the Rules of
   // Hooks and crashes if `user` flips mid-commit.
   if (!user) return null;
@@ -130,11 +132,15 @@ export function BuyerDashboard() {
                       <span className="font-mono tabular ml-1.5">${r.agentBudget}</span>
                     </div>
                     <button
-                      onClick={async (e) => {
+                      onClick={(e) => {
                         e.stopPropagation();
-                        if (confirm(`Are you sure you want to deactivate the AI representative for ${r.productName}?`)) {
-                          await deactivateRep(r.id);
-                        }
+                        setPrompt({
+                          title: `Deactivate the rep for ${r.productName}?`,
+                          description: 'The thread stays, but the rep stops negotiating on your behalf and frees one of your two slots.',
+                          confirmLabel: 'Deactivate rep',
+                          danger: true,
+                          onConfirm: () => deactivateRep(r.id),
+                        });
                       }}
                       className="hairline rounded-lg px-3 py-1.5 text-xs text-text-soft hover:border-danger hover:text-danger hover:bg-danger/5 transition-all cursor-pointer"
                     >
@@ -171,6 +177,7 @@ export function BuyerDashboard() {
         productName={preview?.name ?? ''}
         onClose={() => setPreview(null)}
       />
+      <PromptDialog request={prompt} onClose={() => setPrompt(null)} />
     </main>
   );
 }

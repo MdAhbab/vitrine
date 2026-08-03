@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bot, Send, Eye, Sparkles, Paperclip, FileText } from 'lucide-react';
+import { toast } from 'sonner';
 import { useStore, type MessageAttachment, type Role } from '../lib/store';
 import { api, mediaUrl, USE_MOCKS } from '../lib/api';
+import { PromptDialog, type PromptRequest } from './PromptDialog';
 import { useShallow } from 'zustand/react/shallow';
 
 const CHAT_MAX_BYTES = 4 * 1024 * 1024;
@@ -51,6 +53,7 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
   const [input, setInput] = useState('');
   const [pendingAtt, setPendingAtt] = useState<MessageAttachment | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [prompt, setPrompt] = useState<PromptRequest | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [msgs.length]);
@@ -58,12 +61,12 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
   const attachFile = async (file: File | null) => {
     if (!file || USE_MOCKS) return;
     if (file.size > CHAT_MAX_BYTES) {
-      alert('Attachments must be 4 MB or smaller (images or PDF only).');
+      toast.error('Attachments must be 4 MB or smaller (images or PDF only).');
       return;
     }
     const ok = file.type.startsWith('image/') || file.type === 'application/pdf';
     if (!ok) {
-      alert('Only images and PDF files are allowed in chat.');
+      toast.error('Only images and PDF files are allowed in chat.');
       return;
     }
     setUploading(true);
@@ -71,7 +74,7 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
       const res = await api.uploadChatAttachment(file);
       setPendingAtt({ url: res.url, name: res.name, mime: res.mime, kind: res.kind, size: res.size });
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'Upload failed');
+      toast.error(e instanceof Error ? e.message : 'Upload failed');
     } finally {
       setUploading(false);
     }
@@ -95,7 +98,7 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
       setInput('');
       setPendingAtt(null);
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'Failed to send message');
+      toast.error(e instanceof Error ? e.message : 'Could not send that message');
     }
   };
 
@@ -156,11 +159,13 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
                   </span>
                   {role === 'buyer' && (
                     <button
-                      onClick={async () => {
-                        if (confirm(`Are you sure you want to deactivate the AI representative for this negotiation?`)) {
-                          await deactivateRep(active.id);
-                        }
-                      }}
+                      onClick={() => setPrompt({
+                        title: 'Deactivate this AI representative?',
+                        description: 'The negotiation thread stays, but the rep stops replying on your behalf and frees one of your two slots.',
+                        confirmLabel: 'Deactivate rep',
+                        danger: true,
+                        onConfirm: () => deactivateRep(active.id),
+                      })}
                       className="hairline rounded-lg px-2.5 py-1 text-xs text-text-soft hover:border-danger hover:text-danger hover:bg-danger/5 transition-colors cursor-pointer"
                     >
                       Deactivate rep
@@ -266,6 +271,7 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
           </>
         )}
       </section>
+      <PromptDialog request={prompt} onClose={() => setPrompt(null)} />
     </div>
   );
 }
@@ -306,7 +312,7 @@ function FeatureRequestBubble({ id, role, onUpdate }: { id: string; role: Role; 
 
   const handleQuoteSubmit = async () => {
     if (!quoteVal || isNaN(+quoteVal) || +quoteVal <= 0) {
-      alert("Please enter a valid price");
+      toast.error('Enter a quote above $0');
       return;
     }
     setSubmitting(true);
@@ -316,7 +322,7 @@ function FeatureRequestBubble({ id, role, onUpdate }: { id: string; role: Role; 
       setReq(updated);
       onUpdate();
     } catch (e: any) {
-      alert(e.message || "Failed to submit quote");
+      toast.error(e?.message || 'Could not submit that quote');
     } finally {
       setSubmitting(false);
     }
@@ -330,7 +336,7 @@ function FeatureRequestBubble({ id, role, onUpdate }: { id: string; role: Role; 
       setReq(updated);
       onUpdate();
     } catch (e: any) {
-      alert(e.message || "Failed to approve quote");
+      toast.error(e?.message || 'Could not approve that quote');
     } finally {
       setSubmitting(false);
     }

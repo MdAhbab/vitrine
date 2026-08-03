@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { Monitor, Smartphone, RotateCcw, ExternalLink, X } from 'lucide-react';
+import { Dialog } from './Dialog';
 
 type Mode = 'browser' | 'phone';
 
@@ -19,25 +20,16 @@ export function PreviewFrame({
   const [reloadKey, setReloadKey] = useState(0);
 
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.25 }}
-          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm grid place-items-center p-4 sm:p-8"
-          onClick={onClose}
-        >
-          <motion.div
-            initial={{ scale: 0.96, opacity: 0, y: 12 }}
-            animate={{ scale: 1, opacity: 1, y: 0 }}
-            exit={{ scale: 0.97, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 220, damping: 26 }}
-            onClick={(e) => e.stopPropagation()}
-            className="bg-surface rounded-2xl hairline overflow-hidden w-full max-w-[1100px] flex flex-col shadow-2xl"
-            style={{ maxHeight: '90vh' }}
-          >
+    <Dialog
+      open={open}
+      onClose={onClose}
+      label={`${productName} live preview`}
+      // p-2 on the smallest screens: p-4 plus the fixed 320px phone frame plus
+      // its 2px border overflowed a 320px-wide viewport.
+      className="p-2 sm:p-8"
+      panelClassName="bg-surface rounded-2xl hairline overflow-hidden w-full max-w-[1100px] max-h-[90vh] flex flex-col shadow-2xl outline-none"
+    >
+      <>
             <div className="flex items-center justify-between gap-4 px-4 h-12 border-b bg-bg/40">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="flex gap-1.5">
@@ -70,13 +62,15 @@ export function PreviewFrame({
                     <Smartphone size={13} />
                   </button>
                 </div>
-                <button onClick={() => setReloadKey((k) => k + 1)} className="w-8 h-8 grid place-items-center text-text-muted hover:text-text" aria-label="Reload">
+                {/* w-10 h-10, not w-8: this toolbar was the one place in the app
+                    where touch targets dropped below the ~44px used elsewhere. */}
+                <button onClick={() => setReloadKey((k) => k + 1)} className="w-10 h-10 grid place-items-center text-text-muted hover:text-text" aria-label="Reload preview">
                   <RotateCcw size={13} />
                 </button>
-                <a href={url} target="_blank" rel="noreferrer" className="w-8 h-8 grid place-items-center text-text-muted hover:text-text" aria-label="Open">
+                <a href={url} target="_blank" rel="noreferrer" className="w-10 h-10 grid place-items-center text-text-muted hover:text-text" aria-label="Open preview in a new tab">
                   <ExternalLink size={13} />
                 </a>
-                <button onClick={onClose} className="w-8 h-8 grid place-items-center text-text-muted hover:text-text" aria-label="Close">
+                <button onClick={onClose} className="w-10 h-10 grid place-items-center text-text-muted hover:text-text" aria-label="Close preview">
                   <X size={14} />
                 </button>
               </div>
@@ -101,9 +95,7 @@ export function PreviewFrame({
                 />
               </motion.div>
             </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+      </>
+    </Dialog>
   );
 }

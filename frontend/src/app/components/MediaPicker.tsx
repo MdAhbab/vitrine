@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ImagePlus, Link2, Loader2, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { api, mediaUrl } from '../lib/api';
 
 type Props = {
@@ -34,7 +35,7 @@ export function MediaPicker({
       setUrlInput('');
       setMode('url');
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'Upload failed');
+      toast.error(e instanceof Error ? e.message : 'Upload failed');
     } finally {
       setUploading(false);
     }

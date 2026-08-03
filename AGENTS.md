@@ -43,7 +43,9 @@
 4. **Embed:** `embed_text` on (name + tagline + description + tags) → vector stored for search.
 5. Emit `listing.enriched` with the filled form + per-field confidence.
 
-**Tools:** `fetch_repo_tree`, `fetch_file`, `read_readme`, `detect_stack` (deterministic), `embed_text`, `write_listing_fields`, `suggest_taxonomy`.
+**Tools (callable by the model):** `fetch_repo_tree`, `fetch_file`, `read_readme`, `detect_stack` (deterministic), `write_listing_fields`.
+
+> Embedding is **not** a model tool — the runner embeds `name + tagline + description + tags` itself once the fields have landed, and skips the call entirely when the content hash is unchanged since the last run.
 
 **Memory:** long-term category/tag embeddings (for consistent taxonomy); short-term run scratch (the assembled repo context).
 
@@ -197,6 +199,8 @@
 ## 6. Shared tool catalogue (typed functions)
 
 > All tools are server-side functions exposed to the model via OpenAI tool calling. Schemas live in `backend/ai/tools/`. Agents may only call tools listed in their section.
+>
+> **Status note.** The tool-calling loop is live for **Repo-Intake** and **Verification**. Pricing, Feature Estimator and the Buyer Representative currently use a single JSON-mode call with a hand-assembled prompt rather than tool dispatch, so `suggest_tiers`, `draft_copy`, `draft_negotiation_message` and `estimate_feature_cost` are registered but not reached from those runners. Migrating them to the tool loop is tracked work, not a claim about today's behaviour.
 
 | Tool | Kind | Summary |
 |---|---|---|
@@ -221,7 +225,7 @@
 | `vision_score_ui(image)` | OpenAI vision | UI quality 0–1 (cached) |
 | `rank_and_section(id, score)` | deterministic | assign sections |
 | `write_listing_fields(id, fields)` | deterministic | persist form fields |
-| `submit_verdict(id, verdict)` | deterministic | persist verification verdict |
+| `submit_verdict(id, verdict)` | deterministic | persist verification verdict (`approve`→review, `request_changes`→draft, `flag`→flagged; an unrecognised verdict escalates rather than rejecting) |
 | `flag_listing(id, reason)` | deterministic | escalate to admin |
 | `draft_negotiation_message(buyer_id, seller_id, listing_id, context, order_details?)` | LLM | Drafts next negotiation message based on bounds, chat history, and buyer's order context |
 | `estimate_feature_cost(listing_id, feature_description)` | LLM-assisted | Evaluates feature request against codebase specs and estimates pricing |
@@ -239,8 +243,11 @@ review.created / listing.updated / cron.nightly ──▶ Curation (recompute)
 ```
 
 - **Workers** are stateless; each subscribes to a stream consumer group → at-least-once delivery + acks.
-- **Idempotency keys** (`{event_id}:{input_hash}`) prevent double-spend of tokens on retries.
+- **Acks are earned.** A message is only acked once every handler for it succeeded. A handler that raises leaves the message unacked so the group redelivers it; after `MAX_DELIVERIES` (3) the event is parked on the `vitrine:events:dead` dead-letter stream with its failure reason.
+- **Idempotency keys** (`{event_id}:{input_hash}`) prevent double-spend of tokens on retries. The dedupe entry is written *after* successful processing, so a consumer that dies mid-handler gets a real redelivery rather than having it skipped as a duplicate.
 - **The AI Orchestration service** owns: budget enforcement, retries/backoff, dead-letter handling, the OpenAI client, prompt assembly (loads the right AGENTS.md section), and the cost meter.
+
+> **Current runtime:** the default deployment runs `EVENT_BUS=memory` (in-process asyncio pub/sub) inside the gateway monolith. The Redis Streams path above is implemented and selected by `EVENT_BUS=redis`; the memory bus has no cross-process delivery, retries, or dead-lettering, and is intended for single-process dev/demo only.
 
 ### Memory model
 | Scope | Store | Examples |
@@ -253,9 +260,18 @@ review.created / listing.updated / cron.nightly ──▶ Curation (recompute)
 Each tool above is a registered **skill**; an agent's section declares which skills it may use. Skills are versioned and individually testable, so the fleet is composable and auditable.
 
 ### Failure & degradation
-- OpenAI error / timeout → exponential backoff → fall back to **heuristic-only** result + `needs_human_review`.
-- Budget exceeded → same graceful degradation; admin alerted.
-- Bad/invalid model output → schema-reject → retry → escalate.
+
+Every agent result carries a **`stub` flag**. `stub=True` means *no usable model
+output was produced* — budget cap hit, every provider failed, or no key is
+configured. The accompanying `text` is a diagnostic for logs, **never** content
+to show a user. Callers must branch on `stub` before surfacing anything; the
+Buyer Representative, for instance, declines to post at all rather than putting
+degraded text into a thread the seller reads.
+
+- **Provider error / timeout** → each call is capped at 30s and walks the provider/model fallback chain; if all fail, the result comes back `stub=True` rather than raising. Degraded results are **not** cached, so a transient outage can't pin a bad answer.
+- **Budget exceeded** → `stub=True` with a `degraded` row in `agent_runs`. Interactive agents fall back to a deterministic, catalog-grounded answer.
+- **Bad/invalid model output** → schema-reject → retry up to `AGENT_MAX_RETRIES` → give up as `error` in `agent_runs`. Malformed tool-call arguments are returned to the model as a tool error so it can correct itself, rather than aborting the run.
+- **Concurrency** → LLM calls share a process-wide semaphore, so a traffic burst queues instead of opening unbounded upstream connections.
 
 ---
 
@@ -270,5 +286,17 @@ Each tool above is a registered **skill**; an agent's section declares which ski
 | `AGENT_MAX_RETRIES` | `2` | schema/transient retries |
 | `AGENT_RUN_BUDGET_TOKENS` | `20000` | per-run cap |
 | `VITRINE_SCORE_WEIGHTS` | see README §6 | ranking weights |
+| `GEMINI_API_KEY` | — | optional fallback provider, used automatically when OpenAI errors or hits quota |
+| `GEMINI_MODELS` | see `.env.example` | walked in order — each Gemini model carries its own quota, so a 429 on one rolls to the next |
+| `MAX_ACTIVE_REPS_PER_BUYER` | `2` | concurrent Buyer Representative cap |
+
+Admins can additionally register provider keys at runtime through the admin
+config (`admin_configs.api_keys`, encrypted at rest); those clients are appended
+after the env-configured ones in the fallback chain.
+
+> **Budget scope:** the daily cap is enforced per orchestrator process. Running
+> more than one worker multiplies the effective cap — keep the AI orchestrator
+> single-process, or move the counter to Redis, before relying on it as a hard
+> financial limit.
 
 > See [backend.md](./backend.md) for how the Orchestration service, tools, and stores are implemented and deployed.

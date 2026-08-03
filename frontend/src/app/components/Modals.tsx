@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { X, Bot, Sparkles, Check, ShieldCheck, CreditCard, Lock, FileText, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Dialog } from './Dialog';
+import { PromptDialog, type PromptRequest } from './PromptDialog';
 import type { Product } from '../lib/mockData';
 import { api, USE_MOCKS } from '../lib/api';
 import { useStore, activeRepsForBuyer, sellerIdFor } from '../lib/store';
@@ -38,6 +39,7 @@ export function BargainModal({ open, onClose, product, onOpenInbox }: { open: bo
     })),
   );
   const [step, setStep] = useState<'brief' | 'terms'>('brief');
+  const [prompt, setPrompt] = useState<PromptRequest | null>(null);
   const [budget, setBudget] = useState(0);
   const [tone, setTone] = useState<'firm' | 'warm' | 'curious'>('warm');
   const [note, setNote] = useState('');
@@ -176,11 +178,15 @@ export function BargainModal({ open, onClose, product, onOpenInbox }: { open: bo
                     </div>
                   </div>
                   <button
-                    onClick={async (e) => {
+                    onClick={(e) => {
                       e.stopPropagation();
-                      if (confirm(`Are you sure you want to deactivate the AI representative for ${r.productName}?`)) {
-                        await deactivateRep(r.id);
-                      }
+                      setPrompt({
+                        title: `Unassign the rep for ${r.productName}?`,
+                        description: 'This frees one of your two representative slots. The negotiation thread is kept.',
+                        confirmLabel: 'Unassign rep',
+                        danger: true,
+                        onConfirm: () => deactivateRep(r.id),
+                      });
                     }}
                     className="hairline rounded-lg px-2.5 py-1 text-[11px] text-text-soft hover:border-danger hover:text-danger hover:bg-danger/5 transition-colors cursor-pointer"
                   >
@@ -303,6 +309,7 @@ export function BargainModal({ open, onClose, product, onOpenInbox }: { open: bo
           </>
         )}
       </footer>
+      <PromptDialog request={prompt} onClose={() => setPrompt(null)} />
     </Shell>
   );
 }

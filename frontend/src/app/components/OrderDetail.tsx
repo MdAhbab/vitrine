@@ -1,5 +1,5 @@
-import { motion, AnimatePresence } from 'motion/react';
 import { X, KeyRound, Play, Copy, Clock } from 'lucide-react';
+import { Dialog } from './Dialog';
 import { useStore, type Order, type Transaction } from '../lib/store';
 
 export function OrderDetail({
@@ -18,18 +18,13 @@ export function OrderDetail({
   const licenseKey = order.licenseKey ?? null;
 
   return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm overflow-y-auto"
-        onClick={onClose}
-      >
-        <motion.div
-          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}
-          transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-          className="max-w-3xl mx-auto my-12 hairline rounded-2xl bg-bg shadow-2xl"
-          onClick={(e) => e.stopPropagation()}
-        >
+    <Dialog
+      open
+      onClose={onClose}
+      label={`Order ${order.id}`}
+      panelClassName="max-w-3xl w-full hairline rounded-2xl bg-bg shadow-2xl max-h-[90vh] overflow-y-auto outline-none"
+    >
+      <div>
           <header className="border-b px-6 lg:px-8 py-4 flex items-center justify-between">
             <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">Order · {order.id}</div>
             <button onClick={onClose} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-accent" aria-label="Close"><X size={14} /></button>
@@ -124,9 +119,8 @@ export function OrderDetail({
               )}
             </section>
           </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+      </div>
+    </Dialog>
   );
 }
 

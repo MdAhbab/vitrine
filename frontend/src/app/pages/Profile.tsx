@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
+import { toast } from 'sonner';
 import { useStore, PLAN_DETAILS, type SellerPlan } from '../lib/store';
 import { setTheme } from '../lib/theme';
 import { api, mediaUrl } from '../lib/api';
@@ -132,7 +133,7 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
         updateUser(updatedUser);
       }
     } catch (err: any) {
-      alert(err.message || 'Failed to upload avatar picture');
+      toast.error(err?.message || 'Could not upload that picture');
     } finally {
       setUploading(false);
     }
@@ -174,7 +175,7 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
       setProfileSuccess(true);
       setTimeout(() => setProfileSuccess(false), 3000);
     } catch (err: any) {
-      alert(err.message || 'Failed to update profile settings');
+      toast.error(err?.message || 'Could not save those settings');
     } finally {
       setProfileSaving(false);
     }
@@ -224,7 +225,7 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
       const me = await api.me();
       updateUser(me);
     } catch (err: any) {
-      alert(err.message || 'Failed to update subscription tier');
+      toast.error(err?.message || 'Could not change your plan');
     }
   };
 

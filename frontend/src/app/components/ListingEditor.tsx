@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { X, Bot, Sparkles, Trash2, Save, Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, mediaUrl, USE_MOCKS } from '../lib/api';
+import { Dialog } from './Dialog';
+import { PromptDialog, type PromptRequest } from './PromptDialog';
 import { useStore, type Listing } from '../lib/store';
 import { MediaPicker, MediaPickerMulti } from './MediaPicker';
 import { Typewriter } from './Typewriter';
@@ -17,6 +18,7 @@ export function ListingEditor({
   const [mode, setMode] = useState<Mode>(initialMode);
   const [draft, setDraft] = useState<Listing>(listing);
   const [drafting, setDrafting] = useState(false);
+  const [prompt, setPrompt] = useState<PromptRequest | null>(null);
 
   useEffect(() => { setDraft(listing); setMode(initialMode); }, [listing, initialMode]);
 
@@ -65,21 +67,22 @@ export function ListingEditor({
   };
 
   const save = () => { upsertListing({ ...draft, aiDraft: false }); setMode('view'); };
-  const remove = () => { if (confirm(`Delete "${listing.name}"? This cannot be undone.`)) { deleteListing(listing.id); onClose(); } };
+  const remove = () => setPrompt({
+    title: `Delete "${listing.name}"?`,
+    description: 'This removes the listing from your window permanently. It cannot be undone.',
+    confirmLabel: 'Delete listing',
+    danger: true,
+    onConfirm: () => { deleteListing(listing.id); onClose(); },
+  });
 
   return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm overflow-y-auto"
-        onClick={onClose}
-      >
-        <motion.div
-          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}
-          transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-          className="max-w-4xl mx-auto my-12 hairline rounded-2xl bg-bg shadow-2xl"
-          onClick={(e) => e.stopPropagation()}
-        >
+    <Dialog
+      open
+      onClose={onClose}
+      label={`Listing ${draft.name}`}
+      panelClassName="max-w-4xl w-full hairline rounded-2xl bg-bg shadow-2xl max-h-[90vh] overflow-y-auto outline-none"
+    >
+      <div>
           {/* Header */}
           <header className="sticky top-0 bg-bg/95 backdrop-blur border-b z-10 px-6 lg:px-8 py-4 flex items-center justify-between rounded-t-2xl">
             <div className="flex items-center gap-3 min-w-0">
@@ -193,9 +196,9 @@ export function ListingEditor({
               <TagList items={draft.techStack} mode={mode} onChange={(items) => update('techStack', items)} />
             </Section>
           </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+      </div>
+      <PromptDialog request={prompt} onClose={() => setPrompt(null)} />
+    </Dialog>
   );
 }
 

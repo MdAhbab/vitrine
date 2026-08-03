@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { Key, Sparkles, Shield, ToggleLeft, ToggleRight, Plus, Trash2, Eye, EyeOff, Sliders, Mail, Save, Bot, Receipt, ScrollText, Settings2 } from 'lucide-react';
 import { useStore, type AdminApiKey } from '../lib/store';
+import { PromptDialog, type PromptRequest } from './PromptDialog';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -19,6 +20,7 @@ export function CuratorConsole() {
   const [newCategory, setNewCategory] = useState('');
   const [newFramework, setNewFramework] = useState('');
   const [formSchemaText, setFormSchemaText] = useState('');
+  const [prompt, setPrompt] = useState<PromptRequest | null>(null);
   const formsDirty = useRef(false);
 
   useEffect(() => {
@@ -98,7 +100,13 @@ export function CuratorConsole() {
             <KeyAdder onAdd={(k) => { addApiKey(k); flash(); }} />
             <div className="space-y-2">
               {adminConfig.apiKeys.map((k) => (
-                <KeyRow key={k.id} k={k} onToggle={() => { toggleApiKey(k.id); flash(); }} onRemove={() => { if (confirm(`Remove ${k.label}?`)) { removeApiKey(k.id); flash(); } }} />
+                <KeyRow key={k.id} k={k} onToggle={() => { toggleApiKey(k.id); flash(); }} onRemove={() => setPrompt({
+                  title: `Remove the ${k.label} key?`,
+                  description: 'Agents stop falling back to this provider immediately. The key cannot be recovered — you would need to paste it again.',
+                  confirmLabel: 'Remove key',
+                  danger: true,
+                  onConfirm: () => { removeApiKey(k.id); flash(); },
+                })} />
               ))}
               {adminConfig.apiKeys.length === 0 && (
                 <div className="hairline rounded-xl p-6 text-center text-sm text-text-muted">No API keys configured. Add one above.</div>
@@ -238,12 +246,17 @@ export function CuratorConsole() {
                 <div key={c} className="hairline rounded-xl p-3 flex items-center justify-between bg-surface">
                   <span className="text-sm font-medium">{c}</span>
                   <button
-                    onClick={async () => {
-                      if (confirm(`Are you sure you want to delete the category "${c}"?`)) {
+                    onClick={() => setPrompt({
+                      title: `Delete the "${c}" category?`,
+                      description: 'Existing listings keep the value; it just stops being offered when creating or editing one.',
+                      confirmLabel: 'Delete category',
+                      danger: true,
+                      onConfirm: async () => {
                         await updateAdminConfig({ categories: categories.filter((x) => x !== c) });
                         flash();
-                      }
-                    }}
+                      },
+                    })}
+                    aria-label={`Delete the ${c} category`}
                     className="hairline rounded-lg w-8 h-8 grid place-items-center md:hover:border-danger md:hover:text-danger active:border-danger active:text-danger"
                   >
                     <Trash2 size={13} />
@@ -288,12 +301,17 @@ export function CuratorConsole() {
                 <div key={f} className="hairline rounded-xl p-3 flex items-center justify-between bg-surface">
                   <span className="text-sm font-medium">{f}</span>
                   <button
-                    onClick={async () => {
-                      if (confirm(`Are you sure you want to delete the framework "${f}"?`)) {
+                    onClick={() => setPrompt({
+                      title: `Delete the "${f}" framework?`,
+                      description: 'Existing listings keep the value; it just stops being offered when creating or editing one.',
+                      confirmLabel: 'Delete framework',
+                      danger: true,
+                      onConfirm: async () => {
                         await updateAdminConfig({ frameworks: frameworks.filter((x) => x !== f) });
                         flash();
-                      }
-                    }}
+                      },
+                    })}
+                    aria-label={`Delete the ${f} framework`}
                     className="hairline rounded-lg w-8 h-8 grid place-items-center md:hover:border-danger md:hover:text-danger active:border-danger active:text-danger"
                   >
                     <Trash2 size={13} />
@@ -353,6 +371,7 @@ export function CuratorConsole() {
           </Card>
         )}
       </div>
+      <PromptDialog request={prompt} onClose={() => setPrompt(null)} />
     </div>
   );
 }

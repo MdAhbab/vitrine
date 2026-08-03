@@ -160,7 +160,7 @@ Vitrine treats AI as the **core of the product**, not a feature bolted on. Seven
 | 3 | **Buyer Concierge Agent** | Buyer search/chat | Hybrid search; answers natural-language queries; compares products. | `semantic_search`, `apply_filters`, `compare_products`, `get_listing` |
 | 4 | **Pricing & Pitch Agent** | Seller drafting | Suggests price tiers, writes copy, proposes business/upsell strategy. | `market_comps`, `get_listing`, `draft_copy`, `suggest_tiers` |
 | 5 | **Curation & Ranking Agent** | Listing live / nightly | Computes the **Vitrine Score** (vision UI score, recency, demo health, engagement). | `compute_features`, `vision_score_ui`, `bayesian_rating`, `rank_and_section` |
-| 6 | **Buyer Representative Agent** | Buyer initiates bargaining | Represents the buyer, chatting with the developer to negotiate pricing or custom packages. | `draft_negotiation_message`, `get_listing`, `get_buyer_constraints` |
+| 6 | **Buyer Representative Agent** | Buyer initiates bargaining | Represents the buyer, chatting with the developer to negotiate pricing or custom packages. | `get_listing`, `draft_negotiation_message`, `market_comps` |
 | 7 | **Feature Cost Estimator Agent** | Feature request submitted | Analyzes requested additional features and estimates recommended charges and milestones. | `estimate_feature_cost`, `get_listing` |
 
 ### How the agents work together (the publishing pipeline)
@@ -407,6 +407,8 @@ $10 + 1–2 days demands a **cheap-but-capable** model and **ruthless cost contr
 
 ## 10. Security & Infrastructure
 
+- **`SECRET_KEY` is mandatory in production.** It signs every JWT *and* derives the encryption key for the admin API-key vault, so the default placeholder would allow forged admin tokens and decryptable stored keys. `ENV=prod` refuses to boot without a real one; `run_onVM.py` generates it on first deploy and never rotates it afterwards (rotating it invalidates live sessions and makes stored keys undecryptable).
+- **Rotate the seeded demo accounts before exposing a deployment.** The shipped `vitrine.db` is seeded for the demo, and those logins are published in [backend.md](./backend.md) — they are a convenience for local evaluation, not credentials for a public instance.
 - **AuthN/Z:** JWT access/refresh, RBAC (`buyer` / `developer` / `admin`), short-lived tokens.
 - **Input validation:** Pydantic schemas at every boundary; strict CORS; request size limits.
 - **Rate limiting & abuse control:** Redis token-bucket per IP/user; agent budget caps.
@@ -498,16 +500,24 @@ Full flags and the deployment topology are documented in [backend.md](./backend.
 
 ## 14. Roadmap — Built vs. Planned
 
-This repository delivers the **complete, deployment-ready plan and orchestration scaffolding**. Implementation phases:
-
 | Phase | Scope | Status |
 |---|---|---|
-| **0 — Planning** | README, AGENTS.md, backend.md, run scripts | ✅ this repo |
-| **1 — MVP** | Auth, listing CRUD, Repo-Intake agent, Vercel preview embed, mock payments + notify | ▢ planned |
-| **2 — AI fleet** | Verification, Concierge (semantic search), Pricing & Pitch, Vitrine Score | ▢ planned |
-| **3 — Commerce** | Stripe adapter, advance payments, secure delivery, reviews | ▢ planned |
-| **4 — Managed hosting** | Native VM preview hosting tier (billed by duration) | ▢ planned |
-| **5 — Polish** | Editorials, analytics, promotion slots (student discounts) | ▢ planned |
+| **0 — Planning** | README, AGENTS.md, backend.md, run scripts | ✅ done |
+| **1 — MVP** | Auth, listing CRUD, Repo-Intake agent, Vercel preview embed, mock payments + notify | ✅ done |
+| **2 — AI fleet** | Verification, Concierge (semantic search), Pricing & Pitch, Vitrine Score | ✅ done |
+| **3 — Commerce** | Advance payments, escrow, payouts, subscriptions, reviews, chats & negotiation | ✅ done |
+| **3b — Stripe** | Real Stripe provider + signed webhooks | ◐ adapter in place, mock is the default provider |
+| **4 — Postgres/Redis** | pgvector ANN, Redis bus + cache + shared budget counter | ◐ portable model set + Redis bus implemented; SQLite/in-memory is the running default |
+| **5 — Managed hosting** | Native preview hosting tier (billed by duration) | ▢ planned |
+
+### Known gaps (deliberate, not accidental)
+
+Worth stating plainly rather than leaving a reader to discover them:
+
+- **The daily spend cap is per-process.** Running the orchestrator with more than one worker multiplies it. Move the counter to Redis before treating it as a hard financial limit.
+- **The Concierge streams, but the model call does not.** The answer is generated in full, then emitted token-by-token over SSE. The perceived-latency win of true streaming is still on the table.
+- **Semantic search is brute-force cosine** over JSON vectors — correct and portable, appropriate at boutique scale, and the reason `pgvector` remains a phase-4 item.
+- **Three of the interactive agents use JSON-mode prompts rather than tool dispatch** (see [AGENTS.md §6](./AGENTS.md#6-shared-tool-catalogue-typed-functions)).
 
 ---
 

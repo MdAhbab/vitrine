@@ -10,6 +10,7 @@ import { VitrineScoreRing } from '../components/VitrineScoreRing';
 import { SpecSheet } from '../components/SpecSheet';
 import { Badge } from '../components/Badge';
 import { ImageWithFallback } from '../components/ImageWithFallback';
+import { PromptDialog, type PromptRequest } from '../components/PromptDialog';
 import { api, USE_MOCKS } from '../lib/api';
 
 export function ProductPage({
@@ -20,6 +21,7 @@ export function ProductPage({
   const [activeScreen, setActiveScreen] = useState(0);
   const [tier, setTier] = useState(1);
   const [reviews, setReviews] = useState<{ id: string; rating: number; body: string; verified: boolean; ts: number }[]>([]);
+  const [prompt, setPrompt] = useState<PromptRequest | null>(null);
 
   useEffect(() => {
     if (!product || USE_MOCKS) return;
@@ -165,18 +167,22 @@ export function ProductPage({
               >
                 <Share2 size={15} />
               </button>
-              <button onClick={async () => {
-                const reason = prompt("Why are you reporting this product?");
-                if (reason) {
+              <button onClick={() => setPrompt({
+                title: `Report ${product.name}`,
+                description: 'Tell a curator what looks wrong — misleading claims, a broken demo, or stolen work.',
+                input: { label: 'Reason', placeholder: 'What should we look at?' },
+                confirmLabel: 'Submit report',
+                danger: true,
+                onConfirm: async (reason) => {
                   try {
                     const { api } = await import('../lib/api');
                     await api.submitReport({ target_type: 'listing', target_id: product.id, reason });
                     toast.success('Report submitted — a curator will review it.');
-                  } catch (e) {
-                    toast.error('Failed to submit report');
+                  } catch {
+                    toast.error('Could not submit that report');
                   }
-                }
-              }} className="w-11 h-11 rounded-xl hairline grid place-items-center hover:border-danger text-text-muted hover:text-danger transition-colors" aria-label="Report">
+                },
+              })} className="w-11 h-11 rounded-xl hairline grid place-items-center hover:border-danger text-text-muted hover:text-danger transition-colors" aria-label="Report">
                 <Flag size={15} />
               </button>
             </div>
@@ -352,6 +358,8 @@ export function ProductPage({
           ))}
         </div>
       </section>
+
+      <PromptDialog request={prompt} onClose={() => setPrompt(null)} />
     </main>
   );
 }
