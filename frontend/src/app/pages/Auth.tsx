@@ -5,6 +5,30 @@ import { useStore, MOCK_USER_IDS, type Role } from '../lib/store';
 
 type Mode = 'login' | 'signup' | 'admin';
 
+/** Turn a raw `"<status> <body>"` API error into something a person can act on.
+ *  api.ts throws the verbatim response body, which for a 422 is a pydantic
+ *  blob — previously shown to the user in an alert(). */
+function friendlyAuthError(raw: string | undefined, mode: Mode): string {
+  const text = raw || '';
+  if (/Failed to fetch|NetworkError/i.test(text)) return "Can't reach the server. Is the API running?";
+  if (text.startsWith('409')) return 'That email is already registered. Try signing in instead.';
+  if (text.startsWith('401')) {
+    return mode === 'admin' ? 'Those are not valid curator credentials.' : 'Incorrect email or password.';
+  }
+  if (text.startsWith('403')) return 'This account is suspended. Contact the curators.';
+  if (text.startsWith('429')) return 'Too many attempts. Wait a moment and try again.';
+  if (text.startsWith('422')) {
+    if (/valid email|email address/i.test(text)) return 'That email address is not valid.';
+    if (/password/i.test(text)) return 'That password is not accepted.';
+    return 'Please check the details you entered.';
+  }
+  if (text.startsWith('400')) {
+    const m = text.match(/"detail"\s*:\s*"([^"]+)"/);
+    if (m) return m[1];
+  }
+  return 'Something went wrong signing you in. Please try again.';
+}
+
 function Wrap({ children, eyebrow, title, blurb, variant = 'paper' }: { children: React.ReactNode; eyebrow: string; title: React.ReactNode; blurb: string; variant?: 'paper' | 'ink' }) {
   return (
     <main className="min-h-[calc(100vh-64px)] grid lg:grid-cols-2">
@@ -37,6 +61,9 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,10 +83,20 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
       return;
     }
 
+    // NEVER substitute demo credentials for blank input. This previously fell
+    // back to the seeded accounts, so submitting the curator form with two empty
+    // fields signed the visitor in as admin@vitrine.io.
+    const emailVal = email.trim();
+    const passwordVal = pw;
+    if (!emailVal || !passwordVal) {
+      setError('Enter your email and password.');
+      return;
+    }
+
+    setError('');
+    setBusy(true);
     try {
       let tokens;
-      const emailVal = email.trim() || (mode === 'admin' ? 'admin@vitrine.io' : finalRole === 'seller' ? 'maker@vitrine.io' : 'june@vitrine.io');
-      const passwordVal = pw || (mode === 'admin' ? 'admin' : finalRole === 'seller' ? 'maker' : 'june');
 
       if (mode === 'login') {
         tokens = await api.login({ email: emailVal, password: passwordVal });
@@ -76,6 +113,16 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
 
       if (tokens && tokens.access_token) {
         api.setTokens(tokens.access_token, tokens.refresh_token);
+        // A seller who ticked "I'm a student" only gets the discount if the
+        // backend can verify an academic email. Previously the checkbox was
+        // dropped entirely in real mode, so it silently did nothing.
+        if (mode === 'signup' && finalRole === 'seller' && isStudent) {
+          try {
+            await api.verifyStudent();
+          } catch {
+            setNotice('Account created — student status needs an academic email (.edu, .ac.bd…), so the discount was not applied.');
+          }
+        }
         const me = await api.me();
         signIn(me);
         // Load operational data from backend
@@ -86,7 +133,9 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
         onDone();
       }
     } catch (err: any) {
-      alert(err.message || "Authentication failed");
+      setError(friendlyAuthError(err?.message, mode));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -101,10 +150,11 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
           </div>
         </div>
         <form onSubmit={submit} className="space-y-3">
-          <Field icon={Mail} label="Curator email" value={email} onChange={setEmail} placeholder="curator@vitrine.studio" />
-          <Field icon={Lock} label="Password" type="password" value={pw} onChange={setPw} placeholder="••••••••••" />
-          <button className="w-full bg-text text-bg rounded-xl h-11 font-medium inline-flex items-center justify-center gap-2 mt-4">
-            Enter the back of house <ArrowRight size={14} />
+          <Field icon={Mail} label="Curator email" value={email} onChange={setEmail} placeholder="curator@vitrine.studio" required />
+          <Field icon={Lock} label="Password" type="password" value={pw} onChange={setPw} placeholder="••••••••••" required />
+          <ErrorNote message={error} />
+          <button disabled={busy} className="w-full bg-text text-bg rounded-xl h-11 font-medium inline-flex items-center justify-center gap-2 mt-4 disabled:opacity-60">
+            {busy ? 'Checking…' : <>Enter the back of house <ArrowRight size={14} /></>}
           </button>
         </form>
         <p className="text-xs mt-6 text-text-muted">
@@ -150,8 +200,8 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
 
       <form onSubmit={submit} className="space-y-3">
         {mode === 'signup' && <Field icon={UserIcon} label="Full name" value={name} onChange={setName} placeholder="June Park" />}
-        <Field icon={Mail} label="Email" value={email} onChange={setEmail} placeholder="you@studio.com" />
-        <Field icon={Lock} type="password" label="Password" value={pw} onChange={setPw} placeholder="••••••••" />
+        <Field icon={Mail} label="Email" value={email} onChange={setEmail} placeholder="you@studio.com" required />
+        <Field icon={Lock} type="password" label="Password" value={pw} onChange={setPw} placeholder="••••••••" required />
 
         {mode === 'signup' && role === 'seller' && (
           <label className="flex items-center gap-2.5 hairline rounded-xl px-4 py-3 cursor-pointer hover:border-accent transition-colors">
@@ -161,8 +211,11 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
           </label>
         )}
 
-        <button className="w-full bg-text text-bg rounded-xl h-11 font-medium inline-flex items-center justify-center gap-2 mt-2">
-          {mode === 'login' ? 'Sign in' : 'Create account'} <ArrowRight size={14} />
+        <ErrorNote message={error} />
+        {notice && <p className="text-xs text-text-muted hairline rounded-xl px-3 py-2">{notice}</p>}
+
+        <button disabled={busy} className="w-full bg-text text-bg rounded-xl h-11 font-medium inline-flex items-center justify-center gap-2 mt-2 disabled:opacity-60">
+          {busy ? 'Please wait…' : <>{mode === 'login' ? 'Sign in' : 'Create account'} <ArrowRight size={14} /></>}
         </button>
       </form>
 
@@ -177,7 +230,16 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
   );
 }
 
-function Field({ icon: Icon, label, value, onChange, type = 'text', placeholder }: { icon: any; label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string }) {
+function ErrorNote({ message }: { message: string }) {
+  if (!message) return null;
+  return (
+    <p role="alert" className="text-sm rounded-xl px-3 py-2 border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400">
+      {message}
+    </p>
+  );
+}
+
+function Field({ icon: Icon, label, value, onChange, type = 'text', placeholder, required }: { icon: any; label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; required?: boolean }) {
   return (
     <label className="block">
       <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted mb-1.5">{label}</div>
@@ -185,6 +247,7 @@ function Field({ icon: Icon, label, value, onChange, type = 'text', placeholder 
         <Icon size={14} className="text-text-muted" />
         <input
           value={value} onChange={(e) => onChange(e.target.value)} type={type} placeholder={placeholder}
+          required={required}
           className="flex-1 bg-transparent outline-none h-11 text-sm"
         />
       </div>
