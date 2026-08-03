@@ -80,7 +80,6 @@ export function BargainModal({ open, onClose, product, onOpenInbox }: { open: bo
   const dispatch = async () => {
     if (!user || atLimit) return;
 
-    const { api, USE_MOCKS } = await import('../lib/api');
     if (USE_MOCKS) {
       const id = startThread({
         productId: product.id, productName: product.name, productCover: product.cover,

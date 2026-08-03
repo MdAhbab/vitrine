@@ -22,8 +22,22 @@ export function ProductCard({
     <motion.article
       whileHover={{ y: -3 }}
       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-      className="group bg-surface hairline rounded-2xl overflow-hidden flex flex-col cursor-pointer transition-colors hover:border-accent/60"
+      className="group bg-surface hairline rounded-2xl overflow-hidden flex flex-col cursor-pointer transition-colors hover:border-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       onClick={onOpen}
+      // This card is the only way into a product page anywhere in the app, so
+      // it has to answer the keyboard too. Enter/Space is handled only when the
+      // card itself holds focus — otherwise activating a nested button (Run
+      // preview, AI Bargain) would bubble up and also open the product.
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${product.name}`}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
     >
       <div className={`relative ${aspect} overflow-hidden bg-surface-2`}>
         <ImageWithFallback

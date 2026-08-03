@@ -64,8 +64,11 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
   // Uploading status
   const [uploading, setUploading] = useState(false);
 
-  // Load profile user and listings
-  const loadProfile = async () => {
+  // Load profile user and listings.
+  // `isStale` guards against out-of-order responses: clicking from one seller
+  // to another fires a second request, and if the first resolves last it would
+  // paint the previous seller's name, bio and listings under the new URL.
+  const loadProfile = async (isStale: () => boolean = () => false) => {
     if (!targetUserId) {
       setLoading(false);
       return;
@@ -74,9 +77,10 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
     setError(null);
     try {
       const data = await api.getProfile(targetUserId);
+      if (isStale()) return;
       setProfileUser(data);
       setListings(data.listings || []);
-      
+
       // Seed form values if owner
       if (isOwner) {
         setDisplayName(data.name || '');
@@ -87,15 +91,18 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
         setThemeDefault(data.themeDefault || 'dark');
       }
     } catch (err: any) {
+      if (isStale()) return;
       console.error(err);
       setError(err.message || 'Failed to load profile');
     } finally {
-      setLoading(false);
+      if (!isStale()) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadProfile();
+    let cancelled = false;
+    loadProfile(() => cancelled);
+    return () => { cancelled = true; };
   }, [targetUserId, currentUser?.id]);
 
   // Load Billing details
@@ -422,8 +429,18 @@ export function Profile({ userId: routeUserId, onBack }: { userId?: string; onBa
                     {listings.map((item) => (
                       <article
                         key={item.id}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Open ${item.name}`}
                         onClick={() => window.location.hash = `#/p/${item.slug}`}
-                        className="group bg-surface hairline rounded-2xl overflow-hidden hover:border-accent transition-all duration-300 flex flex-col cursor-pointer hover:-translate-y-0.5"
+                        onKeyDown={(e) => {
+                          if (e.target !== e.currentTarget) return;
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            window.location.hash = `#/p/${item.slug}`;
+                          }
+                        }}
+                        className="group bg-surface hairline rounded-2xl overflow-hidden hover:border-accent transition-all duration-300 flex flex-col cursor-pointer hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                       >
                         {/* Cover Image */}
                         <div className="h-40 bg-surface-2 overflow-hidden relative border-b border-border-c">

@@ -175,7 +175,6 @@ export function ProductPage({
                 danger: true,
                 onConfirm: async (reason) => {
                   try {
-                    const { api } = await import('../lib/api');
                     await api.submitReport({ target_type: 'listing', target_id: product.id, reason });
                     toast.success('Report submitted — a curator will review it.');
                   } catch {

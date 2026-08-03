@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowRight, Mail, Lock, Shield, User as UserIcon, GraduationCap, ShoppingBag, Wrench } from 'lucide-react';
 import { Logo } from '../components/Logo';
+import { api, USE_MOCKS } from '../lib/api';
 import { useStore, MOCK_USER_IDS, type Role } from '../lib/store';
 
 type Mode = 'login' | 'signup' | 'admin';
@@ -69,7 +70,6 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
     e.preventDefault();
     const finalRole: Role = mode === 'admin' ? 'admin' : role;
 
-    const { api, USE_MOCKS } = await import('../lib/api');
     if (USE_MOCKS) {
       signIn({
         id: MOCK_USER_IDS[finalRole],

@@ -62,7 +62,18 @@ export function BuyerDashboard() {
             {libraryProducts.map((p) => {
               const order = myOrders.find((o) => o.productId === p.id);
               return (
-                <article key={p.id} className="group hairline rounded-2xl bg-surface overflow-hidden hover:border-accent/60 transition-colors cursor-pointer" onClick={() => order && setOpenOrder(order)}>
+                <article
+                  key={p.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open order details for ${p.name}`}
+                  onClick={() => order && setOpenOrder(order)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); order && setOpenOrder(order); }
+                  }}
+                  className="group hairline rounded-2xl bg-surface overflow-hidden hover:border-accent/60 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
                   <div className="relative">
                     <img src={p.cover} alt="" className="aspect-[16/10] object-cover w-full group-hover:scale-[1.02] transition-transform duration-500" />
                     <div className="absolute top-3 left-3 font-mono text-[10px] uppercase tracking-wider text-white/90 bg-black/40 backdrop-blur rounded-full px-2 py-1 inline-flex items-center gap-1"><KeyRound size={10} /> owned</div>

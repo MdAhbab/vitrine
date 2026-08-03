@@ -25,6 +25,23 @@ export function TopNav({ route, navigate, onConcierge }: { route: Route; navigat
 
   useEffect(() => { setMobileOpen(false); }, [route]);
 
+  // The account menu used to close only on mouse-leave, so opening it by
+  // keyboard and tabbing away left it stuck open over the page. Escape and an
+  // outside click close it too; App's global Escape handler doesn't cover it.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-account-menu]')) setMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onDown);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onDown);
+    };
+  }, [menuOpen]);
+
   const goAndClose = (r: Route) => { setMobileOpen(false); navigate(r); };
 
   const link = (id: Route, label: string) => (
@@ -90,16 +107,19 @@ export function TopNav({ route, navigate, onConcierge }: { route: Route; navigat
           <ThemeToggle />
 
           {user ? (
-            <div className="relative hidden sm:block">
+            <div className="relative hidden sm:block" data-account-menu>
               <button
                 onClick={() => setMenuOpen((s) => !s)}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                aria-label="Account menu"
                 className="hairline rounded-full h-9 pr-3 pl-1 flex items-center gap-2 hover:border-accent active:border-accent transition-colors"
               >
                 <span className="w-7 h-7 rounded-full grid place-items-center gold-gradient text-[var(--accent-ink)] text-xs font-serif">{user.name[0]}</span>
                 <span className="text-xs hidden md:inline">{user.name.split(' ')[0]}</span>
               </button>
               {menuOpen && (
-                <div onMouseLeave={() => setMenuOpen(false)} className="absolute right-0 top-11 w-56 bg-surface hairline rounded-xl overflow-hidden shadow-2xl">
+                <div role="menu" onMouseLeave={() => setMenuOpen(false)} className="absolute right-0 top-11 w-56 bg-surface hairline rounded-xl overflow-hidden shadow-2xl">
                   <div className="px-4 py-3 border-b">
                     <div className="font-serif text-sm">{user.name}</div>
                     <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted mt-0.5">{user.role}</div>
