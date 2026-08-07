@@ -12,6 +12,7 @@ export type Product = {
   vitrineScore: number;
   scoreBreakdown: { label: string; value: number }[];
   demoUrl: string;
+  repoUrl?: string;
   demoHealth: 'live' | 'degraded' | 'down';
   badges: ('verified' | 'best-ui' | 'new' | 'live-demo')[];
   screenshots: string[];

@@ -65,6 +65,7 @@ class ProductOut(BaseModel):
     vitrineScore: float
     scoreBreakdown: list[ScoreItem] = []
     demoUrl: str
+    repoUrl: str | None = None
     demoHealth: str = "live"
     badges: list[str] = []
     screenshots: list[str] = []

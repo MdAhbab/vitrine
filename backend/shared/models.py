@@ -94,6 +94,7 @@ class Listing(PK, Base):
     # draft|enriching|review|live|flagged|paused|archived|rejected
     status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
     demo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     demo_health: Mapped[str] = mapped_column(String(16), default="live")  # live|degraded|down
     managed_hosting: Mapped[str] = mapped_column(String(16), default="no")  # no|demo|full
 

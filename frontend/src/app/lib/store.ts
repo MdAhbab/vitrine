@@ -79,7 +79,7 @@ export type Order = Transaction & {
 
 export type Listing = Product & {
   ownerId: string;
-  status: 'live' | 'in-review' | 'draft' | 'rejected';
+  status: 'live' | 'in-review' | 'draft' | 'rejected' | 'paused' | 'archived';
 };
 
 export type AdminApiKey = {
@@ -119,6 +119,11 @@ export type AdminConfig = {
   forms?: any[];
 };
 
+// `paused` and `archived` deliberately keep their own identity rather than
+// collapsing into `draft`. The seller dashboard files drafts into a separate
+// lane that is exempt from the plan's active-listing quota, and the backend
+// still counts a paused listing against that quota — folding the two together
+// made the dashboard promise a free slot the API would refuse.
 const STATUS_MAP: Record<string, Listing['status']> = {
   review: 'in-review',
   enriching: 'in-review',
@@ -126,8 +131,8 @@ const STATUS_MAP: Record<string, Listing['status']> = {
   draft: 'draft',
   live: 'live',
   rejected: 'rejected',
-  paused: 'draft',
-  archived: 'draft',
+  paused: 'paused',
+  archived: 'archived',
 };
 
 export function normalizeListing(raw: Record<string, unknown>): Listing {
@@ -437,7 +442,9 @@ export const useStore = create<State>((set, get) => ({
         sdlc: l.sdlc,
         business_model: l.businessModel,
         tech_stack: l.techStack,
-        ai_draft: l.aiDraft
+        ai_draft: l.aiDraft,
+        repo_url: l.repoUrl,
+        demo_url: l.demoUrl,
       };
       await api.updateListing(l.id, patch);
       await get().loadData();

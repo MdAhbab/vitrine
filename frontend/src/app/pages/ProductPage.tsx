@@ -70,9 +70,14 @@ export function ProductPage({
                 <Play size={14} fill="currentColor" /> Open the vitrine
               </span>
             </button>
-            <div className="absolute top-4 left-4 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/90">
-              <span className="live-dot" /> live demo
-            </div>
+            {/* Only claim a live demo when the listing actually has one — the
+                catalogue now holds CLIs, firmware and mobile binaries that
+                legitimately have no hosted preview. */}
+            {product.hasLiveDemo && (
+              <div className="absolute top-4 left-4 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/90">
+                <span className="live-dot" /> live demo
+              </div>
+            )}
           </div>
           <div className="flex gap-2 p-3 overflow-x-auto scroll-rail">
             {product.screenshots.map((s, i) => (

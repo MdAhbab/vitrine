@@ -11,45 +11,108 @@ import { Typewriter } from './Typewriter';
 type Mode = 'view' | 'edit';
 
 export function ListingEditor({
-  listing, mode: initialMode, onClose,
-}: { listing: Listing; mode: Mode; onClose: () => void }) {
+  listing, mode: initialMode, onClose, resolveId,
+}: {
+  listing: Listing;
+  mode: Mode;
+  onClose: () => void;
+  /**
+   * Set when the parent opened this editor over a listing it is still creating
+   * server-side, so the form can appear instantly instead of after a round
+   * trip. Resolves to the real listing id; every write awaits it first.
+   */
+  resolveId?: Promise<string>;
+}) {
   const upsertListing = useStore((s) => s.upsertListing);
   const deleteListing = useStore((s) => s.deleteListing);
+  const loadData = useStore((s) => s.loadData);
   const [mode, setMode] = useState<Mode>(initialMode);
   const [draft, setDraft] = useState<Listing>(listing);
   const [drafting, setDrafting] = useState(false);
+  const [draftStage, setDraftStage] = useState('');
   const [prompt, setPrompt] = useState<PromptRequest | null>(null);
+  const [creating, setCreating] = useState(Boolean(resolveId));
 
   useEffect(() => { setDraft(listing); setMode(initialMode); }, [listing, initialMode]);
+
+  useEffect(() => {
+    if (!resolveId) { setCreating(false); return; }
+    let live = true;
+    setCreating(true);
+    resolveId
+      .then((id) => { if (live) setDraft((d) => ({ ...d, id })); })
+      .catch(() => { /* the parent surfaces the failure */ })
+      .finally(() => { if (live) setCreating(false); });
+    return () => { live = false; };
+  }, [resolveId]);
+
+  /** The server-side id, waiting for the background create if one is in flight. */
+  const listingId = async () => (resolveId ? await resolveId : draft.id);
 
   const update = <K extends keyof Listing>(k: K, v: Listing[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const updateSdlc = (k: keyof Listing['sdlc'], v: string) => setDraft((d) => ({ ...d, sdlc: { ...d.sdlc, [k]: v } }));
   const updateBusiness = (k: keyof Listing['businessModel'], v: any) => setDraft((d) => ({ ...d, businessModel: { ...d.businessModel, [k]: v } }));
 
-  // Ask the real Pricing & Pitch agent for the copy. This used to be a 900ms
-  // fake delay followed by hardcoded string templates and an invented tech
-  // stack, all under a banner reading "filled by our AI" — the button never
-  // touched the network.
+  // The drafting button drives two different agents depending on what the
+  // seller has given us:
+  //
+  //   repo URL present -> Repo-Intake reads the repository and fills the whole
+  //                       form sheet (stack, spec, description, tags). This is
+  //                       the path AGENTS.md §1 describes and the one sellers
+  //                       expect from "AI-draft"; it was unreachable from this
+  //                       editor because there was no field to put a repo in.
+  //   no repo URL      -> Pricing & Pitch drafts copy from the name/category
+  //                       alone, which is all it can honestly do.
   const aiRedraft = async () => {
     if (USE_MOCKS) return;
     if (!draft.name?.trim()) {
       toast.error('Give the piece a name first — the agent drafts from it.');
       return;
     }
+    const repo = draft.repoUrl?.trim();
     setDrafting(true);
     try {
-      // Persist the basics so the agent reasons over what the seller actually typed.
-      await api.updateListing(draft.id, {
+      const id = await listingId();
+      // Persist what the seller typed so the agents reason over it, not over
+      // the placeholder row.
+      setDraftStage('Saving your inputs…');
+      await api.updateListing(id, {
         name: draft.name, category: draft.category,
         framework: draft.framework, price: draft.price,
+        repo_url: repo || null, demo_url: draft.demoUrl?.trim() || null,
       });
-      const res = await api.pricing(draft.id);
+
+      if (repo) {
+        setDraftStage('Reading the repository…');
+        const res = await api.aiIntake(id, {
+          repo_url: repo.startsWith('http') ? repo : `https://${repo}`,
+        });
+        if (res?.stub) {
+          toast.error('The intake agent is unavailable right now. Try again shortly.');
+          return;
+        }
+        if (!res?.enriched) {
+          toast.error("The agent couldn't read that repository. Check the URL is public, or clear it to draft from the name alone.");
+          return;
+        }
+        // Intake writes straight to the row, so re-read rather than guess.
+        setDraftStage('Loading the drafted sheet…');
+        await loadData();
+        const fresh = useStore.getState().listings.find((l) => l.id === id);
+        if (fresh) setDraft({ ...fresh, aiDraft: true });
+        toast.success(`Repo-Intake filled ${res.fields_written} field(s) from your repository`);
+        return;
+      }
+
+      setDraftStage('Drafting copy…');
+      const res = await api.pricing(id);
       if (res?.stub) {
         toast.error('The drafting agent is unavailable right now. Try again shortly.');
         return;
       }
       setDraft((d) => ({
         ...d,
+        id,
         tagline: d.tagline || res.tagline || d.tagline,
         description: d.description || res.long_description || res.short_description || d.description,
         businessModel: {
@@ -58,15 +121,28 @@ export function ListingEditor({
         },
         aiDraft: true,
       }));
-      toast.success('Draft updated by the Pricing & Pitch agent');
+      toast.success('Draft updated by the Pricing & Pitch agent. Add a repository URL for a full spec sheet.');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Drafting failed');
     } finally {
       setDrafting(false);
+      setDraftStage('');
     }
   };
 
-  const save = () => { upsertListing({ ...draft, aiDraft: false }); setMode('view'); };
+  const save = async () => {
+    try {
+      const id = await listingId();
+      await upsertListing({ ...draft, id, aiDraft: false });
+      setDraft((d) => ({ ...d, id, aiDraft: false }));
+      setMode('view');
+    } catch {
+      // Reachable only when the background create failed. Stay in edit mode so
+      // the seller's typing survives rather than switching to a view of a row
+      // that was never persisted.
+      toast.error('This draft never reached the server. Close and start it again.');
+    }
+  };
   const remove = () => setPrompt({
     title: `Delete "${listing.name}"?`,
     description: 'This removes the listing from your window permanently. It cannot be undone.',
@@ -88,7 +164,10 @@ export function ListingEditor({
             <div className="flex items-center gap-3 min-w-0">
               <img src={mediaUrl(draft.cover)} alt="" className="w-10 h-10 rounded-lg object-cover" />
               <div className="min-w-0">
-                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">{mode === 'view' ? 'Listing' : 'Editing'}</div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted inline-flex items-center gap-1.5">
+                  {mode === 'view' ? 'Listing' : 'Editing'}
+                  {creating && <><Loader2 size={9} className="animate-spin" /> saving draft…</>}
+                </div>
                 <div className="font-serif text-lg truncate">{draft.name}</div>
               </div>
             </div>
@@ -100,11 +179,13 @@ export function ListingEditor({
                 </>
               ) : (
                 <>
-                  <button onClick={aiRedraft} disabled={drafting} className="group hairline rounded-lg px-3 h-9 text-sm inline-flex items-center gap-2 hover:border-accent hover:text-accent">
+                  <button onClick={aiRedraft} disabled={drafting} className="group hairline rounded-lg px-3 h-9 text-sm inline-flex items-center gap-2 hover:border-accent hover:text-accent disabled:opacity-60">
                     {drafting ? <Loader2 size={13} className="animate-spin" /> : <Bot size={13} className="text-accent" />}
-                    <Typewriter words={['AI redraft', 'Draft from idea', 'Fill in the gaps']} className="font-mono text-[11px] uppercase tracking-wider" />
+                    {drafting
+                      ? <span className="font-mono text-[11px] uppercase tracking-wider">{draftStage || 'Drafting…'}</span>
+                      : <Typewriter words={['AI redraft', 'Draft from repo', 'Fill in the gaps']} className="font-mono text-[11px] uppercase tracking-wider" />}
                   </button>
-                  <button onClick={save} className="bg-text text-bg rounded-lg px-3 h-9 text-sm inline-flex items-center gap-2"><Save size={13} /> Save</button>
+                  <button onClick={save} disabled={drafting} className="bg-text text-bg rounded-lg px-3 h-9 text-sm inline-flex items-center gap-2 disabled:opacity-60"><Save size={13} /> Save</button>
                 </>
               )}
               <button onClick={onClose} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-accent" aria-label="Close"><X size={14} /></button>
@@ -153,6 +234,19 @@ export function ListingEditor({
                 <Field label="Framework"><Input v={draft.framework} mode={mode} onChange={(v) => update('framework', v)} /></Field>
                 <Field label="Price ($)"><Input v={String(draft.price)} mode={mode} onChange={(v) => update('price', Number(v) || 0)} type="number" /></Field>
               </div>
+            </Section>
+
+            {/* Links */}
+            <Section
+              title="Links"
+              hint="Paste a public repository URL and the AI redraft button reads it — stack, spec sheet, description, and tags come back filled. Without one, the agent can only draft copy from your title."
+            >
+              <Field label="Repository URL">
+                <Input v={draft.repoUrl ?? ''} mode={mode} onChange={(v) => update('repoUrl', v)} placeholder="https://github.com/you/your-project" />
+              </Field>
+              <Field label="Demo URL">
+                <Input v={draft.demoUrl ?? ''} mode={mode} onChange={(v) => update('demoUrl', v)} placeholder="https://your-project.vercel.app" />
+              </Field>
             </Section>
 
             {/* SDLC */}
@@ -223,12 +317,13 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Input({ v, mode, onChange, type = 'text' }: { v: string; mode: Mode; onChange: (v: string) => void; type?: string }) {
+function Input({ v, mode, onChange, type = 'text', placeholder }: { v: string; mode: Mode; onChange: (v: string) => void; type?: string; placeholder?: string }) {
   if (mode === 'view') return <div className="text-sm">{v || <span className="text-text-muted italic">—</span>}</div>;
   return (
     <input
       type={type}
       value={v}
+      placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       className="w-full hairline rounded-lg bg-surface-2 px-3 h-10 text-sm focus:border-accent outline-none"
     />

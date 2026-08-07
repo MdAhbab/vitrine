@@ -23,7 +23,9 @@ from backend.shared.models import Listing, ListingField, ListingTier, User, Feat
 from backend.shared.plans import listing_limit
 
 # Listing statuses that count against a seller's active-listing quota.
-_ACTIVE_LISTING_STATUSES = ("draft", "enriching", "review", "live", "flagged", "paused")
+# Drafts are excluded: they're work-in-progress and shouldn't block sellers
+# from creating more listings on limited plans.
+_ACTIVE_LISTING_STATUSES = ("enriching", "review", "live", "flagged", "paused")
 # Rows scanned when filtering by tag (a JSON column, so not SQL-filterable on
 # the portable path). Bounds the scan while covering the whole live catalog at
 # boutique scale; a GIN index on listing tags is the Postgres-era fix.
@@ -204,24 +206,10 @@ async def create_listing(
     user: Principal = Depends(require_role("seller", "admin")),
     db: AsyncSession = Depends(get_session),
 ) -> ProductOut:
-    # Enforce the plan's active-listing quota at creation time (admins exempt).
-    if user.role != "admin":
-        owner = await db.get(User, user.id)
-        limit = listing_limit(owner.plan if owner else "free")
-        now = datetime.now(timezone.utc)
-        active = (await db.execute(
-            select(func.count()).select_from(Listing).where(
-                Listing.owner_id == user.id,
-                Listing.status.in_(_ACTIVE_LISTING_STATUSES),
-                (Listing.expires_at == None) | (Listing.expires_at > now),
-            )
-        )).scalar_one()
-        if active >= limit:
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                f"Your plan allows up to {limit} active listings. Upgrade to add more.",
-            )
-
+    # No quota check here. Every listing is born a draft, and a draft costs
+    # nothing — the slot is claimed when the seller submits it for review (see
+    # submit_listing). Gating creation meant a seller at quota could not start
+    # writing the piece that would replace one they were about to retire.
     listing = Listing(
         owner_id=user.id, name=body.name, slug=await _unique_slug(db, body.name),
         tagline=body.tagline, category=body.category,
@@ -245,6 +233,11 @@ async def trigger_intake(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
     if listing.owner_id != user.id and user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Forbidden")
+    # Persist the repo before dispatching — the async worker reads the listing
+    # row, and the seller's editor renders this field back to them.
+    if body.repo_url:
+        listing.repo_url = body.repo_url
+        await db.commit()
     # Publishing the event lets the Repo-Intake agent fill the form sheet async.
     await bus.publish(
         "listing.created",
@@ -307,6 +300,10 @@ async def update_listing(listing_id: str, patch: dict,
         listing.demo_url = patch["demo_url"]
     if "demoUrl" in patch:
         listing.demo_url = patch["demoUrl"]
+    if "repo_url" in patch:
+        listing.repo_url = patch["repo_url"]
+    if "repoUrl" in patch:
+        listing.repo_url = patch["repoUrl"]
         
     await db.commit()
     await db.refresh(listing)
@@ -324,6 +321,29 @@ async def submit_listing(listing_id: str,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
     if listing.owner_id != user.id and user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Forbidden")
+
+    # This is where a draft stops being free: submitting claims one of the
+    # plan's active-listing slots. Re-submitting something already in the
+    # pipeline is a no-op against the quota, so only count when coming from a
+    # non-active status. Admins are exempt.
+    if user.role != "admin" and listing.status not in _ACTIVE_LISTING_STATUSES:
+        owner = await db.get(User, listing.owner_id)
+        limit = listing_limit(owner.plan if owner else "free")
+        now = datetime.now(timezone.utc)
+        active = (await db.execute(
+            select(func.count()).select_from(Listing).where(
+                Listing.owner_id == listing.owner_id,
+                Listing.status.in_(_ACTIVE_LISTING_STATUSES),
+                (Listing.expires_at == None) | (Listing.expires_at > now),
+            )
+        )).scalar_one()
+        if active >= limit:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"Your plan allows up to {limit} active listings. "
+                "Delete or retire one, or upgrade, then submit this draft.",
+            )
+
     listing.status = "review"
     db.add(listing)
     await db.commit()

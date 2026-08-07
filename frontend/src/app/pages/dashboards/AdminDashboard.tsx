@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Shield, MessageSquare, Receipt, Users, Sparkles, Check, X, Eye, Pencil } from 'lucide-react';
+import { Shield, MessageSquare, Receipt, Users, Sparkles, Check, X, Eye, Pencil, Trash2 } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useStore } from '../../lib/store';
 import { toast } from 'sonner';
@@ -265,7 +265,11 @@ export function AdminDashboard() {
                     <button onClick={() => setEditingListing(l)} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-accent" aria-label="Edit"><Pencil size={13} /></button>
                     <button onClick={() => handleDecision(l.id, 'approve')} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-success hover:text-success" aria-label="Approve"><Check size={14} /></button>
                     <button onClick={() => handleDecision(l.id, 'reject')} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-danger hover:text-danger" aria-label="Reject"><X size={14} /></button>
-                    <button onClick={() => handleDeleteListing(l.id)} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-danger hover:text-danger" aria-label="Delete"><X size={14} /></button>
+                    {/* Trash, not a second X: rejecting is a reversible verdict,
+                        deleting destroys the row. Two identical X glyphs left
+                        those a coin-flip apart. Matches the delete affordance
+                        used in the seller dashboard and curator console. */}
+                    <button onClick={() => handleDeleteListing(l.id)} className="hairline rounded-lg w-11 h-11 grid place-items-center hover:border-danger hover:text-danger" aria-label="Delete"><Trash2 size={13} /></button>
                   </div>
                 </article>
               );

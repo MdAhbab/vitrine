@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Crown, GraduationCap, Plus, TrendingUp, Wallet, Bot, Sparkles } from 'lucide-react';
+import { Crown, GraduationCap, Plus, TrendingUp, Wallet, Bot, Sparkles, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, USE_MOCKS } from '../../lib/api';
 import { useStore, PLAN_DETAILS, normalizeListing, type SellerPlan, type Listing } from '../../lib/store';
 import { Inbox } from '../../components/Inbox';
 import { ListingEditor } from '../../components/ListingEditor';
+import { PromptDialog, type PromptRequest } from '../../components/PromptDialog';
 import { Tabs, Stat, Pill } from './BuyerDashboard';
 
 const mockSeries = Array.from({ length: 14 }, (_, i) => ({
@@ -26,9 +27,12 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
   );
   const [payoutBusy, setPayoutBusy] = useState(false);
   const [analytics, setAnalytics] = useState<any>(null);
-  const [tab, setTab] = useState<'overview' | 'listings' | 'inbox' | 'payouts' | 'plan'>('overview');
-  const [editor, setEditor] = useState<{ listing: Listing; mode: 'view' | 'edit' } | null>(null);
+  const [tab, setTab] = useState<'overview' | 'listings' | 'drafts' | 'inbox' | 'payouts' | 'plan'>('overview');
+  const [editor, setEditor] = useState<
+    { listing: Listing; mode: 'view' | 'edit'; ready?: Promise<string> } | null
+  >(null);
   const [repostingId, setRepostingId] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState<PromptRequest | null>(null);
 
   useEffect(() => {
     if (USE_MOCKS) return;
@@ -69,54 +73,97 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
     }
   };
 
-  const aiDraftNew = async () => {
+  // Opens the editor on the same tick it is clicked. The button used to await
+  // createListing -> updateListing -> a full loadData() before rendering
+  // anything, so the dialog appeared seconds after the click. The row is still
+  // created server-side; the editor just holds its id as a promise and awaits
+  // it at the first write instead of blocking the open.
+  const aiDraftNew = () => {
+    const draftId = `p_draft_${Math.random().toString(36).slice(2, 8)}`;
+    const cover = listings[0]?.cover ?? '';
+    const seed: Listing = {
+      id: draftId,
+      slug: `new-listing-${draftId}`,
+      name: 'Untitled piece',
+      tagline: '',
+      seller: { name: user.name, handle: `@${user.name.toLowerCase().replace(/\s+/g, '')}`, verified: false },
+      category: 'Dashboards', tags: [], price: 49,
+      tiers: [
+        { name: 'Source', price: 49, features: ['Full source code', 'MIT license', 'Email support'] },
+        { name: 'Source + Setup', price: 129, features: ['Onboarding call', '30 days of fixes'], recommended: true },
+        { name: 'Bespoke', price: 329, features: ['Brand reskin', '90 days of support'] },
+      ],
+      vitrineScore: 70,
+      scoreBreakdown: [
+        { label: 'Completeness', value: 60 }, { label: 'UI craft', value: 60 }, { label: 'Demo health', value: 80 },
+        { label: 'Reviews', value: 0 }, { label: 'Recency', value: 100 }, { label: 'Engagement', value: 40 },
+      ],
+      demoUrl: '', repoUrl: '', demoHealth: 'live', badges: ['new'],
+      screenshots: [cover], cover, ratingDistribution: [0,0,0,0,0], rating: 0, reviewsCount: 0,
+      description: '', spec: [], framework: 'React', license: 'MIT', hasLiveDemo: false,
+      createdAt: new Date().toISOString(),
+      sdlc: { problem: '', solution: '', methodology: '', discussions: '' },
+      businessModel: { kind: 'for-profit', pitch: '', revenueStreams: [] },
+      techStack: [], aiDraft: true,
+      ownerId: user.id, status: 'draft',
+    };
+
     if (USE_MOCKS) {
-      const draftId = `p_draft_${Math.random().toString(36).slice(2, 8)}`;
-      const cover = listings[0]?.cover ?? '';
-      const seed: Listing = {
-        id: draftId,
-        slug: `new-listing-${draftId}`,
-        name: 'Untitled piece',
-        tagline: '',
-        seller: { name: user.name, handle: `@${user.name.toLowerCase().replace(/\s+/g, '')}`, verified: false },
-        category: 'Dashboards', tags: [], price: 49,
-        tiers: [
-          { name: 'Source', price: 49, features: ['Full source code', 'MIT license', 'Email support'] },
-          { name: 'Source + Setup', price: 129, features: ['Onboarding call', '30 days of fixes'], recommended: true },
-          { name: 'Bespoke', price: 329, features: ['Brand reskin', '90 days of support'] },
-        ],
-        vitrineScore: 70,
-        scoreBreakdown: [
-          { label: 'Completeness', value: 60 }, { label: 'UI craft', value: 60 }, { label: 'Demo health', value: 80 },
-          { label: 'Reviews', value: 0 }, { label: 'Recency', value: 100 }, { label: 'Engagement', value: 40 },
-        ],
-        demoUrl: 'https://vercel.com', demoHealth: 'live', badges: ['new'],
-        screenshots: [cover], cover, ratingDistribution: [0,0,0,0,0], rating: 0, reviewsCount: 0,
-        description: '', spec: [], framework: 'React', license: 'MIT', hasLiveDemo: false,
-        createdAt: new Date().toISOString(),
-        sdlc: { problem: '', solution: '', methodology: '', discussions: '' },
-        businessModel: { kind: 'for-profit', pitch: '', revenueStreams: [] },
-        techStack: [], aiDraft: true,
-        ownerId: user.id, status: 'draft',
-      };
       upsertListing(seed);
       setEditor({ listing: seed, mode: 'edit' });
       return;
     }
-    try {
-      const created = await api.createListing({ name: 'Untitled piece', category: 'Dashboards', tagline: '', price: 49 });
-      await api.updateListing(created.id, { ai_draft: true });
-      await loadData();
-      const fresh = useStore.getState().listings.find((l) => l.id === created.id) ?? normalizeListing(created);
-      setEditor({ listing: { ...fresh, aiDraft: true }, mode: 'edit' });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not create draft');
-    }
+
+    // Fire the create now, hand the editor the *promise* of its id, and open on
+    // this tick. Nothing is written against the placeholder id — every write in
+    // the editor awaits this first.
+    const ready = (async () => {
+      try {
+        const created = await api.createListing({
+          name: seed.name, category: seed.category, tagline: '', price: seed.price,
+        });
+        await api.updateListing(created.id, { ai_draft: true });
+        await loadData();
+        return normalizeListing(created).id;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Could not create the draft';
+        toast.error(msg);
+        throw e;
+      }
+    })();
+    // The rejection is reported above and re-thrown for awaiting writers; this
+    // keeps it from also surfacing as an unhandled promise rejection.
+    ready.catch(() => {});
+
+    setEditor({ listing: seed, mode: 'edit', ready });
   };
+
+  const confirmDelete = (l: Listing) => setPrompt({
+    title: `Delete "${l.name}"?`,
+    description: l.status === 'draft'
+      ? 'This discards the draft permanently. It cannot be undone.'
+      : 'This removes the listing permanently. Buyers will no longer see it. It cannot be undone.',
+    confirmLabel: l.status === 'draft' ? 'Discard draft' : 'Delete listing',
+    danger: true,
+    onConfirm: async () => {
+      try {
+        await useStore.getState().deleteListing(l.id);
+        toast.success(l.status === 'draft' ? 'Draft discarded' : 'Listing deleted');
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Delete failed');
+      }
+    },
+  });
 
   const plan: SellerPlan = user.plan ?? 'free';
   const planMeta = PLAN_DETAILS[plan];
   const mine = listings.filter((l) => l.ownerId === user.id);
+  // Drafts are unfinished work, not inventory. They live in their own lane and
+  // — matching the API's quota rule — never consume an active-listing slot.
+  const drafts = mine.filter((l) => l.status === 'draft');
+  const published = mine.filter((l) => l.status !== 'draft');
+  const quota = planMeta.posts;
+  const atQuota = quota !== 'unlimited' && published.length >= quota;
   const myThreads = threads.filter((t) => t.sellerId === user.id || t.sellerName === user.name);
   const repThreads = myThreads.filter((t) => t.isAgent);
   const myTxns = transactions.filter((t) => t.sellerName === user.name || t.sellerId === user.id);
@@ -160,7 +207,8 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
         tab={tab} onChange={setTab}
         items={[
           { id: 'overview', label: 'Overview' },
-          { id: 'listings', label: `Listings · ${mine.length}` },
+          { id: 'listings', label: `Listings · ${published.length}` },
+          { id: 'drafts', label: `Drafts · ${drafts.length}` },
           { id: 'inbox', label: `Inbox · ${myThreads.length}` },
           { id: 'payouts', label: 'Payouts' },
           { id: 'plan', label: 'Plan & limits' },
@@ -226,49 +274,82 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
 
         {tab === 'listings' && (
           <div className="space-y-3">
-            {mine.map((l, i) => {
-              const isExpired = l.expiresAt ? new Date(l.expiresAt) < new Date() : false;
-              return (
-                <article key={l.id} className="group hairline rounded-2xl bg-surface p-4 flex items-center gap-4 hover:border-accent/60 transition-colors">
-                  <img src={l.cover} alt="" className="w-16 h-16 rounded-lg object-cover" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <div className="font-serif text-lg">{l.name}</div>
-                      {l.aiDraft && <span className="font-mono text-[10px] uppercase tracking-wider text-accent inline-flex items-center gap-1"><Bot size={10} /> draft</span>}
-                    </div>
-                    <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted mt-1">
-                      {l.category} · {l.framework} · ${l.price.toLocaleString()}
-                      {l.expiresAt && ` · Expires: ${new Date(l.expiresAt).toLocaleDateString()}`}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2 items-center">
-                      <Pill kind={isExpired ? 'bad' : l.status === 'live' ? 'good' : l.status === 'in-review' ? 'wait' : l.status === 'rejected' ? 'bad' : 'wait'}>
-                        {isExpired ? 'expired' : l.status}
-                      </Pill>
-                      <span className="text-xs text-text-muted">Score · <span className="font-mono tabular text-text">{l.vitrineScore}</span></span>
-                      <span className="text-xs text-text-muted">Sales · <span className="font-mono tabular text-text">{Math.max(0, 42 - i * 5)}</span></span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    {isExpired && (
-                      <button
-                        onClick={() => handleRepost(l.id)}
-                        disabled={repostingId === l.id}
-                        className="bg-accent text-[var(--accent-ink)] rounded-lg px-3 h-9 text-sm font-medium hover:opacity-90 inline-flex items-center gap-1.5 transition-opacity disabled:opacity-50"
-                      >
-                        <Bot size={13} /> {repostingId === l.id ? 'Reposting...' : 'Repost with AI'}
-                      </button>
-                    )}
-                    <button onClick={() => setEditor({ listing: l, mode: 'view' })} className="hairline rounded-lg px-3 h-9 text-sm hover:border-accent">View</button>
-                    <button onClick={() => setEditor({ listing: l, mode: 'edit' })} className="hairline rounded-lg px-3 h-9 text-sm hover:border-accent">Edit</button>
-                  </div>
-                </article>
-              );
-            })}
-            {mine.length === 0 && (
+            <div className="hairline rounded-xl bg-surface-2/40 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+              <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">
+                Active listings ·{' '}
+                <span className={atQuota ? 'text-danger' : 'text-text'}>{published.length}</span>
+                {quota !== 'unlimited' && <span> / {quota}</span>}
+                {quota === 'unlimited' && <span> / ∞</span>}
+                {drafts.length > 0 && <span className="normal-case tracking-normal"> — {drafts.length} draft{drafts.length === 1 ? '' : 's'} not counted</span>}
+              </div>
+              {atQuota && (
+                <button onClick={goToPricing} className="font-mono text-[10px] uppercase tracking-wider text-accent border-b border-accent">
+                  Upgrade for more slots
+                </button>
+              )}
+            </div>
+            {published.map((l, i) => (
+              <ListingRow
+                key={l.id} l={l} salesHint={Math.max(0, 42 - i * 5)}
+                reposting={repostingId === l.id} onRepost={() => handleRepost(l.id)}
+                onView={() => setEditor({ listing: l, mode: 'view' })}
+                onEdit={() => setEditor({ listing: l, mode: 'edit' })}
+                onDelete={() => confirmDelete(l)}
+              />
+            ))}
+            {published.length === 0 && (
               <div className="hairline rounded-2xl p-10 text-center">
                 <Bot size={20} className="text-accent mx-auto" />
-                <div className="font-serif text-xl mt-3">No listings yet</div>
-                <p className="text-sm text-text-muted mt-2">Let our AI draft your first one — you'll edit it before it goes live.</p>
+                <div className="font-serif text-xl mt-3">No live listings yet</div>
+                <p className="text-sm text-text-muted mt-2">
+                  {drafts.length > 0
+                    ? 'You have work in progress — finish a draft and submit it for review.'
+                    : "Let our AI draft your first one — you'll edit it before it goes live."}
+                </p>
+                <button
+                  onClick={() => (drafts.length > 0 ? setTab('drafts') : aiDraftNew())}
+                  className="mt-5 bg-text text-bg rounded-xl px-4 h-10 text-sm inline-flex items-center gap-2"
+                >
+                  <Bot size={13} className="text-accent" /> {drafts.length > 0 ? 'Open drafts' : 'AI-draft a listing'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'drafts' && (
+          <div className="space-y-3">
+            <div className="hairline rounded-xl bg-accent/5 border-accent/30 px-4 py-3 text-sm text-text-soft flex items-start gap-3">
+              <Sparkles size={14} className="text-accent shrink-0 mt-0.5" />
+              <p>
+                Drafts are private and <span className="text-text">don't use an active-listing slot</span>.
+                Delete the ones you've abandoned, or submit a draft for review to publish it.
+              </p>
+            </div>
+            {drafts.map((l) => (
+              <ListingRow
+                key={l.id} l={l}
+                onView={() => setEditor({ listing: l, mode: 'view' })}
+                onEdit={() => setEditor({ listing: l, mode: 'edit' })}
+                onDelete={() => confirmDelete(l)}
+                onSubmit={atQuota ? undefined : async () => {
+                  try {
+                    await api.submitListing(l.id);
+                    await loadData();
+                    toast.success('Submitted for review');
+                    setTab('listings');
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'Could not submit');
+                  }
+                }}
+                submitBlockedReason={atQuota ? `Your plan allows ${quota} active listings` : undefined}
+              />
+            ))}
+            {drafts.length === 0 && (
+              <div className="hairline rounded-2xl p-10 text-center">
+                <Bot size={20} className="text-accent mx-auto" />
+                <div className="font-serif text-xl mt-3">No drafts</div>
+                <p className="text-sm text-text-muted mt-2">Start one and it stays here until you submit it — no slot consumed.</p>
                 <button onClick={aiDraftNew} className="mt-5 bg-text text-bg rounded-xl px-4 h-10 text-sm inline-flex items-center gap-2"><Bot size={13} className="text-accent" /> AI-draft a listing</button>
               </div>
             )}
@@ -400,8 +481,90 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
       </div>
 
       {editor && (
-        <ListingEditor listing={editor.listing} mode={editor.mode} onClose={() => setEditor(null)} />
+        <ListingEditor
+          listing={editor.listing} mode={editor.mode} resolveId={editor.ready}
+          onClose={() => setEditor(null)}
+        />
       )}
+      <PromptDialog request={prompt} onClose={() => setPrompt(null)} />
     </main>
+  );
+}
+
+/** One row in either the Listings or the Drafts lane. */
+function ListingRow({
+  l, salesHint, reposting, onRepost, onView, onEdit, onDelete, onSubmit, submitBlockedReason,
+}: {
+  l: Listing;
+  salesHint?: number;
+  reposting?: boolean;
+  onRepost?: () => void;
+  onView: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onSubmit?: () => void;
+  submitBlockedReason?: string;
+}) {
+  const isDraft = l.status === 'draft';
+  const isExpired = l.expiresAt ? new Date(l.expiresAt) < new Date() : false;
+  return (
+    <article className="group hairline rounded-2xl bg-surface p-4 flex items-center gap-4 hover:border-accent/60 transition-colors">
+      <img src={l.cover} alt="" className="w-16 h-16 rounded-lg object-cover" />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="font-serif text-lg">{l.name}</div>
+          {l.aiDraft && <span className="font-mono text-[10px] uppercase tracking-wider text-accent inline-flex items-center gap-1"><Bot size={10} /> ai-drafted</span>}
+        </div>
+        <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted mt-1">
+          {l.category} · {l.framework} · ${l.price.toLocaleString()}
+          {l.expiresAt && ` · Expires: ${new Date(l.expiresAt).toLocaleDateString()}`}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2 items-center">
+          <Pill kind={isExpired ? 'bad' : l.status === 'live' ? 'good' : l.status === 'rejected' ? 'bad' : 'wait'}>
+            {isExpired ? 'expired' : l.status}
+          </Pill>
+          {isDraft ? (
+            <span className="text-xs text-text-muted">Not counted against your plan</span>
+          ) : (
+            <>
+              <span className="text-xs text-text-muted">Score · <span className="font-mono tabular text-text">{l.vitrineScore}</span></span>
+              {salesHint !== undefined && (
+                <span className="text-xs text-text-muted">Sales · <span className="font-mono tabular text-text">{salesHint}</span></span>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+      <div className="flex gap-2">
+        {isExpired && onRepost && (
+          <button
+            onClick={onRepost}
+            disabled={reposting}
+            className="bg-accent text-[var(--accent-ink)] rounded-lg px-3 h-9 text-sm font-medium hover:opacity-90 inline-flex items-center gap-1.5 transition-opacity disabled:opacity-50"
+          >
+            <Bot size={13} /> {reposting ? 'Reposting...' : 'Repost with AI'}
+          </button>
+        )}
+        {isDraft && (
+          <button
+            onClick={onSubmit}
+            disabled={!onSubmit}
+            title={submitBlockedReason}
+            className="bg-accent text-[var(--accent-ink)] rounded-lg px-3 h-9 text-sm font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+          >
+            Submit for review
+          </button>
+        )}
+        <button onClick={onView} className="hairline rounded-lg px-3 h-9 text-sm hover:border-accent">View</button>
+        <button onClick={onEdit} className="hairline rounded-lg px-3 h-9 text-sm hover:border-accent">Edit</button>
+        <button
+          onClick={onDelete}
+          className="hairline rounded-lg w-9 h-9 grid place-items-center hover:border-danger hover:text-danger transition-colors"
+          aria-label={isDraft ? `Discard draft ${l.name}` : `Delete listing ${l.name}`}
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+    </article>
   );
 }
