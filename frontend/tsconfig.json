@@ -20,8 +20,11 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
 
-    /* Paths */
-    "baseUrl": ".",
+    /* Paths — `baseUrl` was removed rather than silenced with
+       `ignoreDeprecations`: TypeScript 6 deprecates it, 7 drops it, and nothing
+       here depended on it (no `@/` imports, no baseUrl-relative imports). Since
+       TS 5, `paths` entries are resolved relative to this file on their own,
+       and the matching alias lives in vite.config.ts for the runtime side. */
     "paths": {
       "@/*": ["./src/*"]
     }

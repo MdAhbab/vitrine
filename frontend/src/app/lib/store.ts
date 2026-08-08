@@ -195,6 +195,10 @@ type State = {
   frameworks: string[];
   sections: string[];
   forms: any[];
+  /** Curator's editorial picks, in their chosen order. Comes from the PUBLIC
+   *  config, not `adminConfig` — that one is admin-only, so reading the picks
+   *  from it meant every ordinary visitor saw an empty list. */
+  featuredIds: string[];
   loadPublicConfig: () => Promise<void>;
 };
 
@@ -296,6 +300,7 @@ export const useStore = create<State>((set, get) => ({
   frameworks: ['Next.js', 'React', 'Vue', 'Svelte', 'Remix', 'Astro', 'Go'],
   sections: ["Planning", "Design", "Development", "Architecture", "Data", "Testing", "Security", "Deployment"],
   forms: [],
+  featuredIds: [],
 
   signIn: (u) => {
     set({ user: u });
@@ -478,6 +483,7 @@ export const useStore = create<State>((set, get) => ({
         frameworks: patch.frameworks ?? s.frameworks,
         sections: patch.sections ?? s.sections,
         forms: patch.forms ?? s.forms,
+        featuredIds: patch.featuredIds ?? s.featuredIds,
       }));
       return;
     }
@@ -528,7 +534,8 @@ export const useStore = create<State>((set, get) => ({
           categories: cfg.categories || [],
           frameworks: cfg.frameworks || [],
           sections: cfg.sections || [],
-          forms: cfg.forms || []
+          forms: cfg.forms || [],
+          featuredIds: cfg.featuredIds || []
         });
       }
     } catch (e) {

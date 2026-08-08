@@ -238,7 +238,73 @@ than failing uniformly.
 
 ---
 
-### 9. Operator scripts have a home
+### 9. The curator's featured picks were visible to nobody but the curator
+
+**`backend/services/catalog/app.py`, `store.ts`, `Home.tsx`, `Browse.tsx`**
+
+Reported as "Featured pieces is not showing the selected listing". The
+selection mechanism was fine — three picks were stored and all three resolved
+to live listings. The delivery was not.
+
+`featuredIds` was only ever read from `GET /admin/config`, which is role-gated
+to admins, and the store only fetches it `if (user.role === 'admin')`. So a
+signed-out visitor or a buyer always held the default `[]`, the home hero hit
+its "top 3 by Vitrine Score" fallback, and the curator's choice changed nothing
+about the storefront — while looking perfectly correct in the console that set
+it. An admin testing their own change was the one person who could not see the
+bug.
+
+- `GET /public-config` (already unauthenticated, already consumed by the store
+  for categories and frameworks) now also returns `featuredIds`. Only `live`
+  listings are emitted — a draft or archived pick must not be advertised, and
+  the storefront cannot render one — and curator order is preserved, because it
+  is an editorial ordering rather than a set.
+- The store gained a top-level `featuredIds`, matching how `categories` and
+  `frameworks` already flow. `updateAdminConfig` already re-calls
+  `loadPublicConfig()`, so a curator's toggle refreshes the storefront with no
+  extra wiring.
+- `Home.tsx` reads the public field instead of `adminConfig`. Its score-based
+  fallback stays: the hero is the landing page's centrepiece and must never be
+  empty.
+
+**The Hero Showcase.** `Browse.tsx` never consumed the picks at all, so the
+gallery had no featured section. There is now one at the top of the gallery —
+eyebrow "Chosen by the house", heading "Hero Showcase", the picks rendered as
+full `ProductCard`s in curator order.
+
+Two deliberate differences from the home hero:
+
+- **It does not fall back to top-by-score.** An empty showcase is a truthful
+  "the house has not chosen anything"; a shelf labelled as curated must not
+  quietly fill itself with an algorithm's picks.
+- **It hides as soon as the visitor starts steering** — any active filter, or
+  any page past the first. Someone who narrowed to "Games under $50" should not
+  be shown three unrelated pieces above their results.
+
+Featured pieces still appear in the grid below, so the "43 pieces on display"
+count stays honest and nothing is hidden from a filtered search.
+
+Six tests in `backend/tests/test_public_config_featured.py` cover anonymous
+access, order preservation under reordering, withholding non-live picks,
+surviving stale/malformed IDs without a 500, and the public payload never
+carrying the API keys and system prompts that live in the same table.
+
+---
+
+### 10. Frontend typecheck was broken before any of this
+
+**`frontend/tsconfig.json`**
+
+`tsc --noEmit` exited 2 on `TS5101: Option 'baseUrl' is deprecated` under the
+pinned TypeScript 6.0.3 — reproduced on a clean tree, so it predates this work.
+`baseUrl` was dead config: there is not one `@/` import or baseUrl-relative
+import in `src/`. Removed rather than silenced with `ignoreDeprecations`, since
+TypeScript 7 drops the option outright. `paths` is kept and still resolves
+(relative to the tsconfig, since TS 5), matching the alias in `vite.config.ts`.
+
+---
+
+### 11. Operator scripts have a home
 
 `backend/scripts/` — `check_ai` (verifies every provider, embedding, vision and
 agent) and `reembed` (rebuilds the catalogue's vectors). Run as
@@ -252,10 +318,10 @@ updated.
 
 ## Verification
 
-- **Backend — 74 passing** (`pytest backend/tests -q`), 8 new in
-  `backend/tests/test_listing_tiers.py`: tier round-trip, copy-only patch
-  leaving tiers intact, nameless and negative-price tiers rejected with 422 and
-  the existing ladder untouched.
+- **Backend — 80 passing** (`pytest backend/tests -q`), 14 new: 8 in
+  `test_listing_tiers.py` (tier round-trip, copy-only patch leaving tiers
+  intact, nameless and negative-price tiers rejected with 422 and the existing
+  ladder untouched) and 6 in `test_public_config_featured.py`.
 - **Frontend** — `tsc --noEmit` clean (`noUnusedLocals`/`noUnusedParameters`
   both on), `npm run build` succeeds, `vitest run` 3 passing.
   `ProductPage.test.tsx` renders the verbatim crashing payload plus a listing

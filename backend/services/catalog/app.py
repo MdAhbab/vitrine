@@ -824,12 +824,30 @@ async def public_config(db: AsyncSession = Depends(get_session)) -> dict:
     frameworks = rows.get("frameworks") or ['Next.js', 'React', 'Vue', 'Svelte', 'Remix', 'Astro', 'Go']
     sections = rows.get("sections") or ["Planning", "Design", "Development", "Architecture", "Data", "Testing", "Security", "Deployment"]
     forms = rows.get("forms") or FORM_SCHEMA
-    
+
+    # The curator's featured picks have to be readable by everyone, not just an
+    # admin. They previously lived only behind `GET /admin/config`, so a signed
+    # -out visitor always saw an empty list and the storefront quietly fell back
+    # to "top 3 by score" — the selection had no visible effect on the site it
+    # was made for.
+    #
+    # Only IDs of listings that are actually live go out: a featured pick that
+    # is still a draft, or has been archived, must not be advertised, and
+    # returning it would leave the storefront rendering a gap it cannot fill.
+    # Curator order is preserved — it is an editorial ordering, not a set.
+    featured_ids = [f for f in (rows.get("featured_ids") or []) if isinstance(f, str)]
+    live_ids: set[str] = set()
+    if featured_ids:
+        live_ids = set((await db.execute(
+            select(Listing.id).where(Listing.id.in_(featured_ids), Listing.status == "live")
+        )).scalars())
+
     return {
         "categories": categories,
         "frameworks": frameworks,
         "sections": sections,
-        "forms": forms
+        "forms": forms,
+        "featuredIds": [f for f in featured_ids if f in live_ids],
     }
 
 

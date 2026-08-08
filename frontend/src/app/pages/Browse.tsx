@@ -11,6 +11,7 @@ const PAGE_SIZE = 18;
 export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct: (slug: string) => void; onPreview: (p: Product) => void; onBargain: (p: Product) => void }) {
   const products = useCatalogProducts();
   const categories = useStore((s) => s.categories);
+  const featuredIds = useStore((s) => s.featuredIds);
   const [cats, setCats] = useState<string[]>([]);
   const [maxPrice, setMaxPrice] = useState(50000);
   const [hasDemo, setHasDemo] = useState(false);
@@ -18,6 +19,17 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
   const [sort, setSort] = useState<Sort>('score');
   const [openFilters, setOpenFilters] = useState(false);
   const [page, setPage] = useState(1);
+
+  // The curator's picks, in the order they chose. Unlike the home hero this
+  // does NOT fall back to top-by-score: an empty showcase is a truthful "the
+  // house has not chosen anything this week", whereas the hero must always be
+  // filled because it is the landing page's centrepiece.
+  const showcase = useMemo(
+    () => featuredIds
+      .map((id) => products.find((p) => p.id === id))
+      .filter((p): p is Product => !!p),
+    [featuredIds, products],
+  );
 
   const frameworks = useMemo(() => ['All', ...Array.from(new Set(products.map((p) => p.framework)))], [products]);
 
@@ -34,6 +46,14 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
     }
     return r;
   }, [products, cats, maxPrice, hasDemo, framework, sort]);
+
+  // A curated shelf must not contradict an active filter: someone who has
+  // narrowed to "Games under $50" should not be shown three unrelated pieces
+  // above their results. The showcase is the unfiltered front of the gallery,
+  // so it steps aside the moment the visitor starts steering.
+  const filtersActive =
+    cats.length > 0 || hasDemo || framework !== 'All' || maxPrice < 50000;
+  const showShowcase = showcase.length > 0 && !filtersActive && page === 1;
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const visible = useMemo(() => {
@@ -134,6 +154,42 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
           <SortMenu value={sort} onChange={setSort} />
         </div>
       </div>
+
+      {showShowcase && (
+        <motion.section
+          key={showcase.map((p) => p.id).join()}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45 }}
+          aria-labelledby="hero-showcase-heading"
+          className="mb-14 pb-12 border-b"
+        >
+          <div className="flex items-end justify-between gap-6 flex-wrap mb-6">
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-accent">
+                Chosen by the house
+              </div>
+              <h2 id="hero-showcase-heading" className="font-serif text-2xl mt-2">
+                Hero Showcase
+              </h2>
+            </div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">
+              {showcase.length} {showcase.length === 1 ? 'piece' : 'pieces'} under the light
+            </p>
+          </div>
+          <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-6">
+            {showcase.map((p) => (
+              <ProductCard
+                key={p.id}
+                product={p}
+                onOpen={() => onOpenProduct(p.slug)}
+                onPreview={() => onPreview(p)}
+                onBargain={() => onBargain(p)}
+              />
+            ))}
+          </div>
+        </motion.section>
+      )}
 
       <div className="grid lg:grid-cols-[220px_1fr] gap-10">
         <aside className="hidden lg:block sticky top-24 self-start">{Filters}</aside>

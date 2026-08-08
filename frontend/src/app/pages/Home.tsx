@@ -20,7 +20,7 @@ export function Home({
   onBrowse: () => void;
   onBargain: (p: Product) => void;
 }) {
-  const adminConfig = useStore((s) => s.adminConfig);
+  const featuredIds = useStore((s) => s.featuredIds);
   const categories = useStore((s) => s.categories);
   const products = useCatalogProducts();
   // `top` was recomputed unmemoized every render, so it was a fresh array
@@ -33,15 +33,21 @@ export function Home({
   );
 
   const featuredProducts = useMemo(() => {
-    if (adminConfig?.featuredIds && adminConfig.featuredIds.length > 0) {
-      const matched = adminConfig.featuredIds
+    // Read from the PUBLIC config. This used to read `adminConfig.featuredIds`,
+    // which is only ever fetched for a signed-in admin — so every visitor and
+    // buyer silently got the score fallback below and the curator's picks were
+    // visible to nobody but the curator.
+    if (featuredIds.length > 0) {
+      const matched = featuredIds
         .map((id) => products.find((p) => p.id === id))
         .filter((p): p is Product => !!p);
       if (matched.length > 0) return matched;
     }
-    // Fallback: top 3 products by Vitrine Score
+    // Fallback: top 3 products by Vitrine Score. The hero is the page's
+    // centrepiece and must never be empty, so it fills itself when the curator
+    // has chosen nothing.
     return top.slice(0, 3);
-  }, [products, adminConfig?.featuredIds, top]);
+  }, [products, featuredIds, top]);
 
   const hasFeatured = featuredProducts.length > 0;
 
