@@ -466,6 +466,9 @@ vitrine/
 │   │                            settings · cache · ratelimit · storage · crypto
 │   ├── migrations/            ← Alembic (Postgres path)
 │   ├── tests/                 ← pytest suite
+│   ├── scripts/               ← operator diagnostics, run on demand:
+│   │                            check_ai (verify every provider + agent) ·
+│   │                            reembed (rebuild the catalogue's vectors)
 │   ├── seed.py · requirements.txt · pytest.ini · alembic.ini
 └── frontend/
     └── src/app/               ← components · pages · lib (api · store · theme)

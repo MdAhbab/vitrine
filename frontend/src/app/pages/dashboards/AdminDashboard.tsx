@@ -9,7 +9,7 @@ import { CuratorConsole } from '../../components/CuratorConsole';
 import { Tabs, Stat, Pill } from './BuyerDashboard';
 import { Dialog } from '../../components/Dialog';
 import { PromptDialog, type PromptRequest } from '../../components/PromptDialog';
-import { api, USE_MOCKS } from '../../lib/api';
+import { api, mediaUrl, USE_MOCKS } from '../../lib/api';
 
 const series = Array.from({ length: 14 }, (_, i) => ({
   d: `${i + 1}`,
@@ -246,7 +246,7 @@ export function AdminDashboard() {
               const isExpired = l.expiresAt ? new Date(l.expiresAt) < new Date() : false;
               return (
                 <article key={l.id} className="hairline rounded-2xl bg-surface p-5 flex items-center gap-5">
-                  <img src={l.cover} alt="" className="w-16 h-16 rounded-lg object-cover" />
+                  <img src={mediaUrl(l.cover)} alt="" className="w-16 h-16 rounded-lg object-cover" />
                   <div className="flex-1 min-w-0">
                     <div className="font-serif text-lg">{l.name}</div>
                     <div className="text-xs text-text-muted">

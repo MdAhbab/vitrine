@@ -1,7 +1,8 @@
 import { Sparkles } from 'lucide-react';
 import type { SpecSection } from '../lib/mockData';
 
-export function SpecSheet({ sections }: { sections: SpecSection[] }) {
+export function SpecSheet({ sections }: { sections?: SpecSection[] | null }) {
+  const rows = sections ?? [];
   return (
     <div className="hairline rounded-2xl overflow-hidden bg-surface">
       <div className="px-6 py-4 border-b flex items-center justify-between">
@@ -14,8 +15,13 @@ export function SpecSheet({ sections }: { sections: SpecSection[] }) {
           AI-assisted
         </div>
       </div>
+      {rows.length === 0 && (
+        <div className="px-6 py-8 text-sm text-text-muted">
+          No spec sheet yet — the seller hasn't published one for this piece.
+        </div>
+      )}
       <dl>
-        {sections.map((sec) => (
+        {rows.map((sec) => (
           <section key={sec.title} className="border-b last:border-b-0">
             <div className="grid grid-cols-1 md:grid-cols-[180px_1fr]">
               <div className="px-6 py-4 bg-surface-2/50 border-b md:border-b-0 md:border-r">
@@ -23,7 +29,7 @@ export function SpecSheet({ sections }: { sections: SpecSection[] }) {
                 <div className="font-serif text-base mt-1">{sec.title}</div>
               </div>
               <div>
-                {sec.fields.map((f, i) => (
+                {(sec.fields ?? []).map((f, i) => (
                   <div key={f.label} className={`grid grid-cols-[160px_1fr] gap-4 px-6 py-3 ${i !== 0 ? 'border-t' : ''}`}>
                     <dt className="font-mono text-[11px] uppercase tracking-wider text-text-muted self-center">{f.label}</dt>
                     <dd className="flex items-start justify-between gap-3 text-sm">

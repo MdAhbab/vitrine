@@ -30,7 +30,13 @@ export function Sell({ onDone }: { onDone: () => void }) {
   const [submitting, setSubmitting] = useState(false);
   const [screenshots, setScreenshots] = useState<string[]>([]);
   const [readmeFile, setReadmeFile] = useState<string | null>(null);
-  const [tiers, setTiers] = useState<{ name: string; price: number; note?: string; rec?: boolean }[] | null>(null);
+  // Carries the FULL agent tier, not a display-only projection. The previous
+  // shape kept `features[0]` as a `note` and dropped the rest, so the ladder
+  // could not be persisted without silently losing most of what the agent
+  // proposed. `note` is now derived at render time instead of stored.
+  const [tiers, setTiers] = useState<
+    { name: string; price: number; features: string[]; rec?: boolean }[] | null
+  >(null);
   const [pricingLoading, setPricingLoading] = useState(false);
 
   useEffect(() => {
@@ -98,7 +104,7 @@ export function Sell({ onDone }: { onDone: () => void }) {
         setTiers(suggested.map((t: any) => ({
           name: String(t.name),
           price: Math.round(Number(t.price) || 0),
-          note: Array.isArray(t.features) ? t.features[0] : undefined,
+          features: Array.isArray(t.features) ? t.features.map(String) : [],
           rec: Boolean(t.recommended),
         })));
         if (res.tagline && !tagline) setTagline(String(res.tagline));
@@ -134,6 +140,21 @@ export function Sell({ onDone }: { onDone: () => void }) {
         description: draft.description || tagline,
         screenshots: screenshots.length ? screenshots : draft.screenshots,
         cover: screenshots[0] ?? draft.cover,
+        // The wizard showed the seller this ladder at step 4 and then dropped
+        // it, so every listing published here arrived with no tiers at all.
+        // Only send a ladder the agent actually produced — when `tiers` is
+        // null the card above is a placeholder, and persisting that would
+        // invent pricing the seller never agreed to.
+        ...(tiers?.length
+          ? {
+              tiers: tiers.map((t) => ({
+                name: t.name,
+                price: t.price,
+                features: t.features,
+                recommended: Boolean(t.rec),
+              })),
+            }
+          : {}),
       });
       await api.submitListing(listingId);
       setStep(4);
@@ -294,11 +315,11 @@ export function Sell({ onDone }: { onDone: () => void }) {
                   )}
                 </p>
                 <div className="grid sm:grid-cols-3 gap-3">
-                  {(tiers ?? [{ name: 'Source', price: price, note: 'Just the code' }]).map((t) => (
+                  {(tiers ?? [{ name: 'Source', price, features: ['Just the code'], rec: false }]).map((t) => (
                     <div key={t.name} className={`hairline rounded-xl p-4 ${t.rec ? 'border-accent bg-surface-2/40' : ''}`}>
                       <div className="font-serif text-lg">{t.name}</div>
                       <div className="font-mono text-2xl tabular mt-2">${t.price}</div>
-                      <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted mt-1">{t.note}</div>
+                      <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted mt-1">{t.features[0]}</div>
                     </div>
                   ))}
                 </div>

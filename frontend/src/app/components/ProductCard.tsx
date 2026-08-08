@@ -47,7 +47,7 @@ export function ProductCard({
         />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/55 to-transparent pointer-events-none" />
         <div className="absolute top-3 left-3 flex gap-1.5">
-          {product.badges.slice(0, 2).map((b) => <Badge key={b} kind={b} overlay={true} />)}
+          {(product.badges ?? []).slice(0, 2).map((b) => <Badge key={b} kind={b} overlay={true} />)}
         </div>
         <button
           onClick={(e) => { e.stopPropagation(); onPreview(); }}
@@ -70,18 +70,18 @@ export function ProductCard({
           <ArrowUpRight size={16} className="text-text-muted shrink-0 transition-transform group-hover:rotate-45 group-hover:text-accent" />
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {product.tags.slice(0, 3).map((t) => (
+          {(product.tags ?? []).slice(0, 3).map((t) => (
             <span key={t} className="font-mono text-[10px] uppercase tracking-wider text-text-muted px-1.5 py-0.5 hairline rounded">{t}</span>
           ))}
         </div>
         <div className="mt-auto pt-3 border-t flex flex-col gap-3">
           <div className="flex items-end justify-between">
             <div className="text-xs text-text-soft">
-              by <span className="text-text">{product.seller.name}</span>
+              by <span className="text-text">{product.seller?.name}</span>
             </div>
             <div className="flex items-baseline gap-3">
-              <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-accent tabular">{product.vitrineScore}</span>
-              <span className="font-mono tabular text-text">${product.price.toLocaleString()}</span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-accent tabular">{Math.round(Number(product.vitrineScore) || 0)}</span>
+              <span className="font-mono tabular text-text">${(product.price ?? 0).toLocaleString()}</span>
             </div>
           </div>
           {onBargain && (

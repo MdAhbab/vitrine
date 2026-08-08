@@ -1,5 +1,295 @@
 # Changelog
 
+## Unreleased — Run the stack locally, publish a listing without losing half of it
+
+Working tree on top of `7f579ae`. Not yet committed.
+
+This began as "get the project running" and turned into a run of bugs that only
+appear once a **real** listing exists. Every fixture in the seed is complete —
+populated tiers, a five-bucket rating histogram, absolute Unsplash cover URLs.
+A listing a person actually creates has none of those, and four separate parts
+of the app assumed otherwise. Publishing one end to end is what surfaced them.
+
+---
+
+### 1. Local environment
+
+**`.venv` rebuilt on Python 3.12.** The tree shipped a 3.14 virtualenv holding
+nothing but pip. Several pins — `cryptography==43.*`, `asyncpg==0.30.*`,
+`greenlet==3.*` — publish no cp314 wheels, so a bootstrap on 3.14 falls back to
+source builds and needs a Rust toolchain. All 54 packages install from wheels on
+3.12.
+
+Worth knowing: `run.py` picks its interpreter via
+`shutil.which("python3.11") or sys.executable`, which on Windows finds neither
+and lands back on 3.14. Invoke the venv's own interpreter
+(`.\.venv\Scripts\python.exe run.py`) rather than a bare `python`.
+
+`SECRET_KEY` was still the shipped `change-me-…` placeholder. Replaced with a
+generated value — safe to rotate here only because `admin_configs.api_keys` was
+`[]`, so nothing encrypted was invalidated.
+
+---
+
+### 2. Login refused a correct password
+
+**`backend/shared/schemas/auth.py`, `frontend/src/app/pages/Auth.tsx`**
+
+`admin@vitrine.io` / `admin` returned 401 through the UI while the same
+credentials returned 200 through the API. The user row is matched on an **exact
+string**, and the email box rendered as `type="text"` with no `autoCapitalize` —
+so a touch keyboard sends `Admin@vitrine.io`, which is a different account.
+`Auth.tsx` reports any 401 as "Incorrect email or password", making a
+capitalisation artefact look like a wrong password.
+
+- A shared `_EmailNormalized` base lowercases and strips the address.
+  `SignupIn` and `LoginIn` both inherit it, so an address can never be *stored*
+  in a form login would fail to find. One point covers signup, login and admin
+  login, and fixes it for every client rather than only this UI.
+- Email inputs are now `type="email"` with `autoCapitalize="none"`,
+  `autoCorrect="off"`, `spellCheck={false}` and proper `autoComplete`.
+
+The password is deliberately **not** trimmed — silently stripping whitespace
+from a password weakens it. `admin ` is still rejected.
+
+---
+
+### 3. A local model provider, so the fleet runs without a key
+
+**`backend/shared/settings.py`, `backend/ai/client.py`, `.env.example`**
+
+Neither hosted key could serve: OpenAI returns `429 You have no credits
+remaining` (there is no free API tier), and the Gemini key is an Antigravity
+credential — it lists models fine but every `generateContent` **and**
+`embedContent` returns `403 PERMISSION_DENIED`. Ollama is appended **after**
+both, so a working key always wins and local inference is the safety net.
+
+Four things that each had to be right for this to work at all:
+
+- **Local calls cost nothing.** `estimate_cost` prices unknown model names at
+  the `gpt-4o-mini` rate, so running on Ollama would have marched
+  `OPENAI_DAILY_LIMIT_USD` toward its cap and eventually refused to answer.
+  `FREE_PROVIDERS` zeroes it.
+- **A separate 300s timeout** for local calls; the shared 30s ceiling kills a
+  cold start while weights load.
+- **Embeddings zero-pad 768 → 1536.** `nomic-embed-text` is 768-dim and the
+  store is 1536; the old code silently dropped any mismatched width. Padding
+  preserves cosine similarity *exactly* — zeros contribute nothing to either
+  the dot product or the magnitudes.
+- `json_mode` extended to the Ollama endpoint.
+
+**Model choice is a measurement, not a preference.** On a 4 GB GTX 1050 Ti:
+
+| Model | Placement | Speed | Tool calls |
+|---|---|---|---|
+| `qwen3:4b` | 4.4 GB — 44% on CPU | 3m36s / 20 tok | answer lands in `reasoning`, `content` empty |
+| `llama3.2:3b` | fits GPU | 7.8s | **malformed, `tool_calls: null`** |
+| **`qwen2.5:3b`** | 2.4 GB, **100% GPU** | 1.7s | proper `tool_calls` |
+
+Repo-Intake and Verification dispatch typed tools, so a model that cannot emit
+`tool_calls` breaks them regardless of how fast it is. Gemma was never a
+candidate for the same reason. Both rejects are recorded in `.env.example` so
+the choice is not silently undone later.
+
+**Consequence: the catalogue had to be re-embedded.** Every stored vector was
+written by `_stub_embedding` while no provider worked, so a real query scored
+against them is noise — search looked functional and ranked nothing. All 46
+listings rebuilt; `mobile app for tracking expenses` now returns Pocket Ledger
+at 0.748.
+
+---
+
+### 4. The product page crashed on every new listing
+
+**`frontend/src/app/pages/ProductPage.tsx`** and four components
+
+`/#/p/<slug>` rendered the error boundary while the API returned a valid 200.
+
+```js
+product.tiers?.[tier].price.toLocaleString()   // tiers: [] -> throws
+```
+
+The `?.` guards `tiers` being null but **not the index being out of range**, and
+`tier` state defaults to `1`. `ratingDistribution[5 - star]` had the same shape.
+Both are the normal state of a freshly published listing.
+
+- `tierIndex` is clamped into range; `buyPrice` falls back to the listing's own
+  price, so the button reads `Buy · $89` instead of throwing. With no tiers the
+  box becomes a "Price / One-time purchase" row rather than vanishing — the buy
+  path stays visually anchored.
+- Rating bars render only when there are reviews *and* a non-zero distribution;
+  otherwise the heading reads "Not yet rated".
+- Empty spec / SDLC / revenue sections state "not documented yet" instead of
+  rendering empty containers.
+
+Three latent crashes of the same family, not yet hit but reachable from the same
+data: `Badge` destructured `undefined` on an unrecognised badge string and took
+the page down, `VitrineScoreRing` emitted `strokeDashoffset="NaN"` on a null
+score (silently dropping the whole arc), and `ProductCard` had unguarded
+`badges`/`tags`/`price`.
+
+---
+
+### 5. Uploaded images never displayed
+
+**`frontend/src/app/components/ImageWithFallback.tsx`** + 13 call sites
+
+The upload itself always worked — file on disk, `cover` set, backend serving it
+at 200. Uploaded media is a **relative** `/files/…` path while every seeded
+listing uses an **absolute** Unsplash URL, and Vite proxies only `/api`. So the
+browser asked :5173 for the file and got a 404. `mediaUrl()` existed for exactly
+this and was not called on the display path.
+
+`ImageWithFallback` now resolves `src` through `mediaUrl()` internally, which
+repairs `ProductCard` and every other consumer at once; absolute `http(s):` and
+`data:` URLs pass through untouched. The remaining raw `<img>` tags were wrapped
+individually across `ConciergePanel`, `CuratorConsole`, `Inbox`, `Modals`,
+`OrderDetail`, `Home`, `AdminDashboard`, `BuyerDashboard` and `SellerDashboard`.
+
+Two incidental bugs fixed in passing: the error state was a sticky boolean, so
+once any image failed the component kept showing the placeholder for later valid
+images (visible when navigating between products); it now records *which* src
+failed. And the placeholder used a hardcoded light gray — the one visual state
+guaranteed to look wrong in dark mode — now a theme token.
+
+---
+
+### 6. Pricing tiers were discarded on the way to the database
+
+**`backend/services/catalog/app.py`, `frontend/src/app/lib/store.ts`,
+`ListingEditor.tsx`, `SellerDashboard.tsx`, `Sell.tsx`**
+
+A published listing came back with `"tiers": []` even though the seller had run
+the Pricing agent. **Four independent drops on one path**, each sufficient on
+its own:
+
+1. `PATCH /listings/{id}` had **no `tiers` branch**. It maps ~20 keys onto the
+   `listings` row, but `listing_tiers` is a separate table and was never
+   touched — a `tiers` array was accepted and silently discarded. This is why
+   `price_cents` survived while the ladder did not.
+2. `store.ts` `upsertListing` never sent `tiers`.
+3. `ListingEditor.tsx` never read the agent's tiers — `aiRedraft` used only
+   `tagline` / `short_description` / `long_description` and threw the ladder
+   away in the browser.
+4. `Sell.tsx` — the listing wizard — displayed the agent's ladder at step 4 and
+   then omitted it from `handleSubmit`. Its local tier shape was also lossy,
+   keeping `features[0]` as a `note` and discarding the rest; it now carries the
+   full tier and derives the note at render time.
+
+Backend hardening: `_tier_rows()` validates name/price/features, caps at 8 tiers
+and 12 features, and truncates to the column width. Validation runs **before**
+any field mutation, so a bad tier rejects the whole patch instead of
+half-applying it. `repost_listing` reuses the same validator — it previously did
+`t["name"]` and would 500 on a malformed agent tier.
+
+`SellerDashboard.aiDraftNew` seeded three **invented** tiers
+(`Source $49` / `Source + Setup $129` / `Bespoke $329`). Harmless while tiers
+never persisted; now it would write pricing the seller never chose. Seeds `[]`.
+
+---
+
+### 7. Seller chooses AI pricing or sets it by hand
+
+**`frontend/src/app/components/ListingEditor.tsx`**
+
+A segmented choice in the editor:
+
+- **AI path** — the proposal renders in a card marked *"Proposed · not applied
+  yet"*, every field editable **before** accepting. Nothing reaches
+  `draft.tiers` without an explicit "Use these tiers" click, per the AGENTS.md
+  §4 advisory contract.
+- **Manual path** — add/remove/edit tiers; "recommended" behaves as a radio.
+
+`askPricing` checks `res.stub` **before** reading `suggested_tiers`. This matters
+more than it looks: on a stub, `pricing.run()` still returns a fully populated
+*fabricated* fallback ladder, so without the guard the seller would be shown
+invented pricing as though the agent had produced it — exactly what AGENTS.md §7
+forbids.
+
+---
+
+### 8. One dead provider no longer floods the log
+
+**`backend/ai/client.py`**
+
+Every AI call printed the full provider error blob:
+
+```
+[ai] fell back to ollama/qwen2.5:3b after: Error code: 403 - [{'error': ...}]
+```
+
+This was not a malfunction — it is the fallback chain working — but a dead
+provider fails the *same* way forever, and a raw `print()` per call drowned the
+real logs.
+
+All `print()` calls are now a module logger (`vitrine.ai.client`), matching the
+existing `vitrine.*` convention. Failures are keyed by *kind* (provider +
+exception class + status + truncated message): first occurrence at WARNING with
+the readable message, identical repeats at DEBUG, and one compact reminder every
+50 occurrences or 15 minutes. A **different** error hashes differently and is
+reported immediately, so a new fault is never masked. The full JSON payload
+remains available at DEBUG, and a `_scrub()` pass redacts credential-shaped
+tokens before any text reaches a log record.
+
+Ten consecutive calls now produce five lines once, then silence. The run also
+surfaced two facts the single-line print had hidden: `gpt-4-turbo` 404s on this
+key, and the Gemini models split into 429-quota and 403-denied groups rather
+than failing uniformly.
+
+---
+
+### 9. Operator scripts have a home
+
+`backend/scripts/` — `check_ai` (verifies every provider, embedding, vision and
+agent) and `reembed` (rebuilds the catalogue's vectors). Run as
+`python -m backend.scripts.check_ai`, matching the existing
+`python -m backend.seed` convention. They sit apart from `seed.py` deliberately:
+that one *is* invoked by `run.py`, the Docker entrypoint and `run_onVM.py`,
+while these are on-demand diagnostics wired into no runtime path. README §12
+updated.
+
+---
+
+## Verification
+
+- **Backend — 74 passing** (`pytest backend/tests -q`), 8 new in
+  `backend/tests/test_listing_tiers.py`: tier round-trip, copy-only patch
+  leaving tiers intact, nameless and negative-price tiers rejected with 422 and
+  the existing ladder untouched.
+- **Frontend** — `tsc --noEmit` clean (`noUnusedLocals`/`noUnusedParameters`
+  both on), `npm run build` succeeds, `vitest run` 3 passing.
+  `ProductPage.test.tsx` renders the verbatim crashing payload plus a listing
+  missing every optional collection, asserting `Buy · $89`, no
+  `$undefined`/`NaN`, and `/files/…` resolving to the API origin.
+- **End to end over HTTP** — fresh seller → create → `POST /ai/pricing`
+  (`stub: false`, real local-model output) → accept with a hand-edited price →
+  submit → tiers present on read-back. The wizard payload shape was verified
+  separately against `listing_tiers`, including cascade cleanup on delete.
+- **AI chain** — `check_ai` reports OpenAI and Gemini dead, Ollama serving,
+  `client.embed` returning a real vector rather than the stub.
+
+## Known gaps
+
+- **Vision scoring is not real.** `qwen2.5:3b` is not multimodal, so
+  `vision_score_ui` returns its heuristic 0.7 — 15% of the Vitrine Score weight
+  is currently a constant. A small local vision model would close this.
+- **Tier ordering is by price, not authored order.** `listing_tiers` has no
+  `position` column, so read order was undefined and only *looked* stable
+  (SQLite rowid). `ORDER BY price_cents, id` was chosen over a schema migration
+  against the live `vitrine.db`; a manual ladder therefore re-sorts by price on
+  save.
+- **Multiple `recommended` tiers are stored faithfully.** The local model
+  returned two in one run. The manual editor's radio behaviour lets a seller fix
+  it, but the invariant is not enforced server-side.
+- **`repost_listing` still auto-applies agent tiers**, overwriting a manual
+  ladder. Read as consent from the explicit "repost & optimize with AI" click,
+  but it sits awkwardly against the advisory rule.
+- Listings published **before** this change keep `tiers: []`. Nothing
+  backfills them — the page now renders them correctly as a single one-time
+  price, and the seller can add a ladder in the editor.
+
+---
+
 ## b502be4 — Seed a real catalogue, fix AI drafting, free drafts from the quota
 
 Range: `58a92ce..b502be4` on `main`.

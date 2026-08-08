@@ -54,9 +54,18 @@ async def _unique_slug(db: AsyncSession, name: str, exclude_id: str | None = Non
         slug, i = f"{base}-{i}", i + 1
 
 
+# listing_tiers has no position column, so "the order the seller typed them in"
+# is not recoverable from the row. Ordering by price keeps the ladder stable and
+# identical on every read (and on Postgres, where unordered SELECT genuinely
+# returns rows in arbitrary order); `id` only breaks ties between equal prices.
+_TIER_ORDER = (ListingTier.price_cents, ListingTier.id)
+
+
 async def _load(db: AsyncSession, listing: Listing) -> ProductOut:
     seller = await db.get(User, listing.owner_id)
-    tiers = (await db.execute(select(ListingTier).where(ListingTier.listing_id == listing.id))).scalars().all()
+    tiers = (await db.execute(select(ListingTier)
+                              .where(ListingTier.listing_id == listing.id)
+                              .order_by(*_TIER_ORDER))).scalars().all()
     fields = (await db.execute(select(ListingField).where(ListingField.listing_id == listing.id))).scalars().all()
     return to_product(listing, seller, list(tiers), list(fields))
 
@@ -76,7 +85,9 @@ async def _load_many(db: AsyncSession, listings: list[Listing]) -> list[ProductO
                (await db.execute(select(User).where(User.id.in_(owner_ids)))).scalars()}
 
     tiers_by: dict[str, list[ListingTier]] = defaultdict(list)
-    for t in (await db.execute(select(ListingTier).where(ListingTier.listing_id.in_(ids)))).scalars():
+    for t in (await db.execute(select(ListingTier)
+                               .where(ListingTier.listing_id.in_(ids))
+                               .order_by(*_TIER_ORDER))).scalars():
         tiers_by[t.listing_id].append(t)
 
     fields_by: dict[str, list[ListingField]] = defaultdict(list)
@@ -85,6 +96,49 @@ async def _load_many(db: AsyncSession, listings: list[Listing]) -> list[ProductO
 
     return [to_product(l, sellers.get(l.owner_id), tiers_by.get(l.id, []), fields_by.get(l.id, []))
             for l in listings]
+
+
+# A pricing ladder is a handful of packages, not a catalogue. The cap is here so
+# a malformed client can't turn one PATCH into thousands of rows.
+_MAX_TIERS = 8
+_MAX_TIER_FEATURES = 12
+
+
+def _tier_rows(raw: object, listing_id: str) -> list[ListingTier]:
+    """Validate a seller-supplied tier list into `listing_tiers` rows.
+
+    The editor always sends the complete set it wants stored, so this is a full
+    replacement — `[]` is a legitimate "this piece has no tiers" and clears them.
+    """
+    if not isinstance(raw, list):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "tiers must be a list")
+    if len(raw) > _MAX_TIERS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"a listing can carry at most {_MAX_TIERS} tiers")
+    rows: list[ListingTier] = []
+    for t in raw:
+        if not isinstance(t, dict):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "each tier must be an object")
+        name = str(t.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "every tier needs a name")
+        try:
+            price = float(t.get("price") or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "tier price must be a number")
+        if price < 0:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "tier price must be non-negative")
+        features = t.get("features") or []
+        if not isinstance(features, list):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "tier features must be a list")
+        rows.append(ListingTier(
+            listing_id=listing_id,
+            name=name[:80],  # matches the column width
+            price_cents=round(price * 100),
+            features=[str(f).strip() for f in features if str(f).strip()][:_MAX_TIER_FEATURES],
+            recommended=bool(t.get("recommended")),
+        ))
+    return rows
 
 
 _last_cleanup_ts = 0.0
@@ -256,7 +310,11 @@ async def update_listing(listing_id: str, patch: dict,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Listing not found")
     if listing.owner_id != user.id and user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Forbidden")
-    
+
+    # Validate the pricing ladder before mutating anything: a malformed tier
+    # then rejects the whole patch instead of leaving half of it applied.
+    tier_rows = _tier_rows(patch["tiers"], listing.id) if "tiers" in patch else None
+
     if "name" in patch:
         listing.name = patch["name"]
         listing.slug = await _unique_slug(db, patch["name"], exclude_id=listing.id)
@@ -304,7 +362,15 @@ async def update_listing(listing_id: str, patch: dict,
         listing.repo_url = patch["repo_url"]
     if "repoUrl" in patch:
         listing.repo_url = patch["repoUrl"]
-        
+    # Tiers live in their own table, so they need an explicit branch — without
+    # one the seller's pricing ladder (AI-suggested or hand-written) was silently
+    # dropped on every save while `price` alone survived, and GET /listings/{slug}
+    # kept answering `"tiers": []`. Sending the key is a full replacement.
+    if tier_rows is not None:
+        await db.execute(delete(ListingTier).where(ListingTier.listing_id == listing.id))
+        for row in tier_rows:
+            db.add(row)
+
     await db.commit()
     await db.refresh(listing)
     
@@ -795,19 +861,16 @@ async def repost_listing(
     listing.tagline = agent_res.get("tagline", listing.tagline)
     listing.description = agent_res.get("long_description") or agent_res.get("short_description") or listing.description
     
-    suggested_tiers = agent_res.get("suggested_tiers", [])
+    # Same validation as the seller's own edits — a nameless or negatively
+    # priced tier from the model used to KeyError/500 the whole repost.
+    suggested_tiers = [t for t in (agent_res.get("suggested_tiers") or [])
+                       if isinstance(t, dict) and str(t.get("name") or "").strip()]
     if suggested_tiers:
         await db.execute(delete(ListingTier).where(ListingTier.listing_id == listing_id))
-        for t in suggested_tiers:
-            new_tier = ListingTier(
-                listing_id=listing_id,
-                name=t["name"],
-                price_cents=int(t["price"] * 100),
-                features=t.get("features", []),
-                recommended=t.get("recommended", False)
-            )
-            db.add(new_tier)
-            
+        for row in _tier_rows(suggested_tiers[:_MAX_TIERS], listing_id):
+            db.add(row)
+
+
     listing.status = "live"
     listing.expires_at = datetime.now(timezone.utc) + timedelta(days=30)
     db.add(listing)

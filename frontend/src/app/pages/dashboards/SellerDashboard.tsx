@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Crown, GraduationCap, Plus, TrendingUp, Wallet, Bot, Sparkles, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { api, USE_MOCKS } from '../../lib/api';
+import { api, USE_MOCKS, mediaUrl } from '../../lib/api';
 import { useStore, PLAN_DETAILS, normalizeListing, type SellerPlan, type Listing } from '../../lib/store';
 import { Inbox } from '../../components/Inbox';
 import { ListingEditor } from '../../components/ListingEditor';
@@ -88,11 +88,10 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
       tagline: '',
       seller: { name: user.name, handle: `@${user.name.toLowerCase().replace(/\s+/g, '')}`, verified: false },
       category: 'Dashboards', tags: [], price: 49,
-      tiers: [
-        { name: 'Source', price: 49, features: ['Full source code', 'MIT license', 'Email support'] },
-        { name: 'Source + Setup', price: 129, features: ['Onboarding call', '30 days of fixes'], recommended: true },
-        { name: 'Bespoke', price: 329, features: ['Brand reskin', '90 days of support'] },
-      ],
+      // No invented ladder. Tiers now persist, so seeding three made-up
+      // packages here would write pricing the seller never chose. The editor's
+      // Pricing section asks them to pick the AI's proposal or set their own.
+      tiers: [],
       vitrineScore: 70,
       scoreBreakdown: [
         { label: 'Completeness', value: 60 }, { label: 'UI craft', value: 60 }, { label: 'Demo health', value: 80 },
@@ -258,7 +257,7 @@ export function SellerDashboard({ goToPricing, goToSell }: { goToPricing: () => 
                 <div className="grid md:grid-cols-2 gap-3 mt-5">
                   {repThreads.map((t) => (
                     <div key={t.id} className="hairline rounded-xl p-4 bg-surface-2/40 flex items-center gap-3">
-                      <img src={t.productCover} alt="" className="w-10 h-10 rounded-lg object-cover" />
+                      <img src={mediaUrl(t.productCover)} alt="" className="w-10 h-10 rounded-lg object-cover" />
                       <div className="flex-1 min-w-0">
                         <div className="font-serif text-sm truncate">{t.productName}</div>
                         <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">{t.buyerName} · budget ${t.agentBudget}</div>
@@ -509,7 +508,7 @@ function ListingRow({
   const isExpired = l.expiresAt ? new Date(l.expiresAt) < new Date() : false;
   return (
     <article className="group hairline rounded-2xl bg-surface p-4 flex items-center gap-4 hover:border-accent/60 transition-colors">
-      <img src={l.cover} alt="" className="w-16 h-16 rounded-lg object-cover" />
+      <img src={mediaUrl(l.cover)} alt="" className="w-16 h-16 rounded-lg object-cover" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <div className="font-serif text-lg">{l.name}</div>

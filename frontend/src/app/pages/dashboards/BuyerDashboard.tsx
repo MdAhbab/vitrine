@@ -2,6 +2,7 @@ import { Bot, KeyRound, MessageSquare, ShoppingBag, ChevronRight } from 'lucide-
 import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore, activeRepsForBuyer, type Listing, type Transaction } from '../../lib/store';
+import { mediaUrl } from '../../lib/api';
 import { Inbox } from '../../components/Inbox';
 import { OrderDetail } from '../../components/OrderDetail';
 import { PreviewFrame } from '../../components/PreviewFrame';
@@ -75,7 +76,7 @@ export function BuyerDashboard() {
                   className="group hairline rounded-2xl bg-surface overflow-hidden hover:border-accent/60 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   <div className="relative">
-                    <img src={p.cover} alt="" className="aspect-[16/10] object-cover w-full group-hover:scale-[1.02] transition-transform duration-500" />
+                    <img src={mediaUrl(p.cover)} alt="" className="aspect-[16/10] object-cover w-full group-hover:scale-[1.02] transition-transform duration-500" />
                     <div className="absolute top-3 left-3 font-mono text-[10px] uppercase tracking-wider text-white/90 bg-black/40 backdrop-blur rounded-full px-2 py-1 inline-flex items-center gap-1"><KeyRound size={10} /> owned</div>
                   </div>
                   <div className="p-5">
@@ -129,7 +130,7 @@ export function BuyerDashboard() {
                 <div key={r.id} className="hairline rounded-2xl bg-surface p-5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <img src={r.productCover} alt="" className="w-12 h-12 rounded-lg object-cover" />
+                      <img src={mediaUrl(r.productCover)} alt="" className="w-12 h-12 rounded-lg object-cover" />
                       <div>
                         <div className="font-serif text-base">{r.productName}</div>
                         <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">with {r.sellerName}</div>

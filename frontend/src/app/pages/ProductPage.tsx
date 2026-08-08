@@ -48,6 +48,24 @@ export function ProductPage({
 
   const similar = products.filter((p) => p.category === product.category && p.id !== product.id).slice(0, 4);
 
+  // A freshly published listing is the *normal* case, not an edge case: the
+  // API returns empty arrays for tiers/ratings/spec and the seller fills them
+  // in later. Everything below has to survive that shape.
+  const screenshots = product.screenshots ?? [];
+  const screenIndex = screenshots.length ? Math.min(Math.max(activeScreen, 0), screenshots.length - 1) : 0;
+  const tiers = product.tiers ?? [];
+  const hasTiers = tiers.length > 0;
+  // `tier` is free-running state (it defaults to 1 and the seller may delete
+  // tiers under it), so clamp before it ever indexes the array.
+  const tierIndex = hasTiers ? Math.min(Math.max(tier, 0), tiers.length - 1) : 0;
+  const buyPrice = (hasTiers ? tiers[tierIndex]?.price : product.price) ?? 0;
+  const distribution = product.ratingDistribution ?? [];
+  const reviewsCount = product.reviewsCount ?? 0;
+  const hasRatings = reviewsCount > 0 && distribution.some((v) => Number(v) > 0);
+  const sdlc = product.sdlc ?? { problem: '', solution: '', methodology: '', discussions: '' };
+  const businessModel = product.businessModel ?? { kind: 'for-profit' as const, pitch: '', revenueStreams: [] };
+  const releasedAt = product.createdAt ? new Date(product.createdAt) : null;
+
   return (
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 pt-10 pb-24">
       <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-text-muted mb-6">
@@ -61,7 +79,7 @@ export function ProductPage({
           className="hairline rounded-2xl overflow-hidden bg-surface"
         >
           <div className="aspect-[16/10] bg-surface-2 relative group">
-            <ImageWithFallback src={product.screenshots[activeScreen]} alt={product.name} className="w-full h-full object-cover" />
+            <ImageWithFallback src={screenshots[screenIndex] ?? product.cover} alt={product.name} className="w-full h-full object-cover" />
             <button
               onClick={() => onPreview(product)}
               className="absolute inset-0 grid place-items-center bg-black/10 md:bg-black/0 md:hover:bg-black/30 transition-colors"
@@ -79,17 +97,19 @@ export function ProductPage({
               </div>
             )}
           </div>
-          <div className="flex gap-2 p-3 overflow-x-auto scroll-rail">
-            {product.screenshots.map((s, i) => (
-              <button
-                key={i}
-                onClick={() => setActiveScreen(i)}
-                className={`shrink-0 w-24 h-16 rounded-lg overflow-hidden hairline transition-all ${i === activeScreen ? 'border-accent ring-1 ring-accent' : 'opacity-70 hover:opacity-100'}`}
-              >
-                <img src={s} alt="" className="w-full h-full object-cover" />
-              </button>
-            ))}
-          </div>
+          {screenshots.length > 1 && (
+            <div className="flex gap-2 p-3 overflow-x-auto scroll-rail">
+              {screenshots.map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActiveScreen(i)}
+                  className={`shrink-0 w-24 h-16 rounded-lg overflow-hidden hairline transition-all ${i === screenIndex ? 'border-accent ring-1 ring-accent' : 'opacity-70 hover:opacity-100'}`}
+                >
+                  <ImageWithFallback src={s} alt="" className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
         </motion.div>
 
         <motion.div
@@ -97,7 +117,7 @@ export function ProductPage({
           className="space-y-6"
         >
           <div className="flex flex-wrap gap-1.5">
-            {product.badges.map((b) => <Badge key={b} kind={b} />)}
+            {(product.badges ?? []).map((b) => <Badge key={b} kind={b} />)}
           </div>
           <div>
             <h1 className="font-serif">{product.name}</h1>
@@ -115,48 +135,57 @@ export function ProductPage({
               className="text-right hover:text-accent transition-colors cursor-pointer group"
             >
               <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-text-muted group-hover:text-accent/80">by</div>
-              <div className="font-serif text-lg">{product.seller.name}</div>
-              <div className="text-xs text-text-muted group-hover:text-accent/60">{product.seller.handle}</div>
+              <div className="font-serif text-lg">{product.seller?.name}</div>
+              <div className="text-xs text-text-muted group-hover:text-accent/60">{product.seller?.handle}</div>
             </button>
           </div>
 
           {/* Tiers */}
           <div className="hairline rounded-2xl bg-surface overflow-hidden">
             <div className="px-5 py-3 border-b font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">
-              Choose a tier
+              {hasTiers ? 'Choose a tier' : 'Price'}
             </div>
-            <div className="divide-y">
-              {product.tiers?.map((t, i) => (
-                <button
-                  key={t.name}
-                  onClick={() => setTier(i)}
-                  className={`w-full text-left p-5 flex items-start gap-4 transition-colors ${tier === i ? 'bg-surface-2/70' : 'hover:bg-surface-2/40'}`}
-                >
-                  <span className={`mt-1 w-4 h-4 rounded-full hairline grid place-items-center shrink-0 ${tier === i ? 'border-accent' : ''}`}>
-                    {tier === i && <span className="w-2 h-2 rounded-full bg-accent" />}
-                  </span>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-serif text-lg">
-                        {t.name}
-                        {t.recommended && <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-accent">recommended</span>}
-                      </span>
-                      <span className="font-mono tabular">${t.price}</span>
+            {hasTiers ? (
+              <div className="divide-y">
+                {tiers.map((t, i) => (
+                  <button
+                    key={t.name ?? i}
+                    onClick={() => setTier(i)}
+                    className={`w-full text-left p-5 flex items-start gap-4 transition-colors ${tierIndex === i ? 'bg-surface-2/70' : 'hover:bg-surface-2/40'}`}
+                  >
+                    <span className={`mt-1 w-4 h-4 rounded-full hairline grid place-items-center shrink-0 ${tierIndex === i ? 'border-accent' : ''}`}>
+                      {tierIndex === i && <span className="w-2 h-2 rounded-full bg-accent" />}
+                    </span>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-serif text-lg">
+                          {t.name}
+                          {t.recommended && <span className="ml-2 font-mono text-[10px] uppercase tracking-wider text-accent">recommended</span>}
+                        </span>
+                        <span className="font-mono tabular">${t.price}</span>
+                      </div>
+                      <ul className="mt-2 space-y-1">
+                        {(t.features ?? []).map((f) => (
+                          <li key={f} className="text-xs text-text-muted flex items-center gap-1.5">
+                            <Check size={11} className="text-accent" /> {f}
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-                    <ul className="mt-2 space-y-1">
-                      {t.features.map((f) => (
-                        <li key={f} className="text-xs text-text-muted flex items-center gap-1.5">
-                          <Check size={11} className="text-accent" /> {f}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </button>
-              ))}
-            </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              // No tiers published yet — fall back to the listing's own price so
+              // the buy path stays intact instead of collapsing to $undefined.
+              <div className="p-5 flex items-baseline justify-between">
+                <span className="font-serif text-lg">One-time purchase</span>
+                <span className="font-mono tabular text-lg">${buyPrice.toLocaleString()}</span>
+              </div>
+            )}
             <div className="p-4 flex gap-2 border-t">
-              <button onClick={() => onCheckout(product, tier)} className="flex-1 h-11 rounded-xl bg-text text-bg font-medium hover:opacity-90 transition-opacity">
-                Buy · ${product.tiers?.[tier].price.toLocaleString()}
+              <button onClick={() => onCheckout(product, tierIndex)} className="flex-1 h-11 rounded-xl bg-text text-bg font-medium hover:opacity-90 transition-opacity">
+                Buy · ${buyPrice.toLocaleString()}
               </button>
               <button
                 onClick={async () => {
@@ -223,10 +252,11 @@ export function ProductPage({
             <dt className="text-text-muted uppercase tracking-wider text-[10px]">Framework</dt><dd>{product.framework}</dd>
             <dt className="text-text-muted uppercase tracking-wider text-[10px]">License</dt><dd>{product.license}</dd>
             <dt className="text-text-muted uppercase tracking-wider text-[10px]">Category</dt><dd>{product.category}</dd>
-            <dt className="text-text-muted uppercase tracking-wider text-[10px]">Released</dt><dd>{new Date(product.createdAt).toLocaleDateString()}</dd>
+            <dt className="text-text-muted uppercase tracking-wider text-[10px]">Released</dt>
+            <dd>{releasedAt && !Number.isNaN(releasedAt.getTime()) ? releasedAt.toLocaleDateString() : '—'}</dd>
           </dl>
         </div>
-        <SpecSheet sections={product.spec} />
+        <SpecSheet sections={product.spec ?? []} />
       </section>
 
       <hr className="editorial-rule my-20" />
@@ -244,10 +274,10 @@ export function ProductPage({
         </div>
         <div className="grid md:grid-cols-2 gap-4 mt-8">
           {[
-            { icon: <Lightbulb size={14} />, title: 'Problem statement', body: product.sdlc.problem },
-            { icon: <Wrench size={14} />, title: 'Solution', body: product.sdlc.solution },
-            { icon: <Workflow size={14} />, title: 'Methodology', body: product.sdlc.methodology },
-            { icon: <MessagesSquare size={14} />, title: 'Discussions', body: product.sdlc.discussions },
+            { icon: <Lightbulb size={14} />, title: 'Problem statement', body: sdlc.problem },
+            { icon: <Wrench size={14} />, title: 'Solution', body: sdlc.solution },
+            { icon: <Workflow size={14} />, title: 'Methodology', body: sdlc.methodology },
+            { icon: <MessagesSquare size={14} />, title: 'Discussions', body: sdlc.discussions },
           ].map((s) => (
             <motion.article
               key={s.title}
@@ -259,7 +289,9 @@ export function ProductPage({
                 {s.icon}
                 <span className="font-mono text-[10px] uppercase tracking-[0.18em]">{s.title}</span>
               </div>
-              <p className="text-text-soft leading-relaxed mt-3 text-sm">{s.body}</p>
+              <p className="text-text-soft leading-relaxed mt-3 text-sm">
+                {s.body?.trim() ? s.body : <span className="text-text-muted italic">Not documented yet.</span>}
+              </p>
             </motion.article>
           ))}
         </div>
@@ -272,17 +304,22 @@ export function ProductPage({
             <Briefcase size={14} />
             <span className="font-mono text-[10px] uppercase tracking-[0.18em]">Business model</span>
           </div>
-          <div className="font-serif text-2xl mt-3 capitalize">{product.businessModel.kind.replace('-', ' ')}</div>
-          <p className="text-text-soft leading-relaxed mt-3 text-sm">{product.businessModel.pitch}</p>
+          <div className="font-serif text-2xl mt-3 capitalize">{(businessModel.kind ?? '').replace('-', ' ') || 'Not specified'}</div>
+          {businessModel.pitch?.trim() && (
+            <p className="text-text-soft leading-relaxed mt-3 text-sm">{businessModel.pitch}</p>
+          )}
           <div className="mt-5">
             <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">Revenue streams</div>
             <ul className="mt-2 space-y-1.5">
-              {product.businessModel.revenueStreams.map((r) => (
+              {(businessModel.revenueStreams ?? []).map((r) => (
                 <li key={r} className="flex items-center gap-2 text-sm">
                   <Check size={12} className="text-accent shrink-0" /> {r}
                 </li>
               ))}
             </ul>
+            {(businessModel.revenueStreams ?? []).length === 0 && (
+              <p className="text-sm text-text-muted mt-2">Not documented yet.</p>
+            )}
           </div>
         </div>
         <div className="hairline rounded-2xl bg-surface p-6">
@@ -292,7 +329,7 @@ export function ProductPage({
           </div>
           <div className="font-serif text-2xl mt-3">Built with</div>
           <div className="mt-4 flex flex-wrap gap-2">
-            {product.techStack.map((t) => (
+            {(product.techStack ?? []).map((t) => (
               <span key={t} className="hairline rounded-full px-3 py-1 text-xs font-mono">{t}</span>
             ))}
           </div>
@@ -309,21 +346,34 @@ export function ProductPage({
       <section className="mt-20 grid lg:grid-cols-[1fr_1.4fr] gap-10">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-text-muted">Reception</div>
-          <h2 className="font-serif mt-3">{product.rating.toFixed(1)} · {product.reviewsCount} reviews</h2>
-          <div className="mt-6 space-y-2">
-            {[5,4,3,2,1].map((star) => {
-              const v = product.ratingDistribution[5 - star];
-              return (
-                <div key={star} className="flex items-center gap-3">
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-text-muted w-6">{star}★</span>
-                  <div className="flex-1 h-1 bg-surface-2 rounded-full overflow-hidden">
-                    <div className="h-full bg-accent" style={{ width: `${v}%` }} />
+          <h2 className="font-serif mt-3">
+            {hasRatings
+              ? `${Number(product.rating ?? 0).toFixed(1)} · ${reviewsCount} ${reviewsCount === 1 ? 'review' : 'reviews'}`
+              : 'Not yet rated'}
+          </h2>
+          {hasRatings ? (
+            <div className="mt-6 space-y-2">
+              {[5,4,3,2,1].map((star) => {
+                // Empty distributions used to yield `undefined` here and render
+                // `width: undefined%` — a NaN bar. Clamp to a real percentage.
+                const raw = Number(distribution[5 - star]);
+                const v = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 100) : 0;
+                return (
+                  <div key={star} className="flex items-center gap-3">
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-text-muted w-6">{star}★</span>
+                    <div className="flex-1 h-1 bg-surface-2 rounded-full overflow-hidden">
+                      <div className="h-full bg-accent" style={{ width: `${v}%` }} />
+                    </div>
+                    <span className="font-mono text-xs tabular text-text-muted w-8 text-right">{v}%</span>
                   </div>
-                  <span className="font-mono text-xs tabular text-text-muted w-8 text-right">{v}%</span>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-text-muted mt-6 leading-relaxed">
+              This piece hasn't been reviewed yet. Ratings appear here once verified buyers weigh in.
+            </p>
+          )}
         </div>
         <div className="space-y-4">
           {reviews.length === 0 ? (

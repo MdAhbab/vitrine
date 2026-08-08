@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { Dialog } from './Dialog';
 import { PromptDialog, type PromptRequest } from './PromptDialog';
 import type { Product } from '../lib/mockData';
-import { api, USE_MOCKS } from '../lib/api';
+import { api, mediaUrl, USE_MOCKS } from '../lib/api';
 import { useStore, activeRepsForBuyer, sellerIdFor } from '../lib/store';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -170,7 +170,7 @@ export function BargainModal({ open, onClose, product, onOpenInbox }: { open: bo
               {reps.map((r) => (
                 <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-surface-2 hairline">
                   <div className="flex items-center gap-2.5">
-                    <img src={r.productCover} alt="" className="w-8 h-8 rounded object-cover" />
+                    <img src={mediaUrl(r.productCover)} alt="" className="w-8 h-8 rounded object-cover" />
                     <div className="text-xs">
                       <span className="font-serif block leading-tight">{r.productName}</span>
                       <span className="text-[10px] text-text-muted">Budget: ${r.agentBudget}</span>
@@ -540,7 +540,7 @@ export function CheckoutModal({ open, onClose, product, tierIndex = 0 }: { open:
           </div>
           <aside className="border-t md:border-t-0 md:border-l bg-surface-2/40 p-6 flex flex-col">
             <div className="flex gap-3 items-center">
-              <img src={product.cover} alt="" className="w-14 h-14 rounded-lg object-cover" />
+              <img src={mediaUrl(product.cover)} alt="" className="w-14 h-14 rounded-lg object-cover" />
               <div className="min-w-0">
                 <div className="font-serif text-base truncate">{product.name}</div>
                 <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">{tier.name}</div>

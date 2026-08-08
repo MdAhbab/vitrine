@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  vitrine:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - vitrine_data:/data
+      - vitrine_files:/app/files
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  vitrine_data:
+  vitrine_files:

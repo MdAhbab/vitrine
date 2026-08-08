@@ -1,9 +1,13 @@
 export function VitrineScoreRing({ score, size = 64, label = true }: { score: number; size?: number; label?: boolean }) {
   const r = size / 2 - 4;
   const c = 2 * Math.PI * r;
-  const offset = c * (1 - score / 100);
+  // A listing with no score yet (or a malformed payload) must not produce a NaN
+  // stroke-dashoffset — SVG silently drops the whole arc when that happens.
+  const raw = Number(score);
+  const safeScore = Math.min(Math.max(Number.isFinite(raw) ? raw : 0, 0), 100);
+  const offset = c * (1 - safeScore / 100);
   return (
-    <div className="inline-flex items-center gap-2.5" title={`Vitrine Score · ${score}`}>
+    <div className="inline-flex items-center gap-2.5" title={`Vitrine Score · ${safeScore}`}>
       <svg width={size} height={size} className="-rotate-90">
         <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--border-c)" strokeWidth="2" fill="none" />
         <circle
@@ -26,7 +30,7 @@ export function VitrineScoreRing({ score, size = 64, label = true }: { score: nu
           className="font-mono tabular"
           style={{ fontSize: size * 0.28, fill: 'var(--text)' }}
         >
-          {score}
+          {Math.round(safeScore)}
         </text>
       </svg>
       {label && (

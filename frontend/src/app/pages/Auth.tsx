@@ -86,7 +86,7 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
     // NEVER substitute demo credentials for blank input. This previously fell
     // back to the seeded accounts, so submitting the curator form with two empty
     // fields signed the visitor in as admin@vitrine.io.
-    const emailVal = email.trim();
+    const emailVal = email.trim().toLowerCase();
     const passwordVal = pw;
     if (!emailVal || !passwordVal) {
       setError('Enter your email and password.');
@@ -150,8 +150,8 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
           </div>
         </div>
         <form onSubmit={submit} className="space-y-3">
-          <Field icon={Mail} label="Curator email" value={email} onChange={setEmail} placeholder="curator@vitrine.studio" required />
-          <Field icon={Lock} label="Password" type="password" value={pw} onChange={setPw} placeholder="••••••••••" required />
+          <Field icon={Mail} label="Curator email" type="email" autoComplete="username" value={email} onChange={setEmail} placeholder="curator@vitrine.studio" required />
+          <Field icon={Lock} label="Password" type="password" autoComplete="current-password" value={pw} onChange={setPw} placeholder="••••••••••" required />
           <ErrorNote message={error} />
           <button disabled={busy} className="w-full bg-text text-bg rounded-xl h-11 font-medium inline-flex items-center justify-center gap-2 mt-4 disabled:opacity-60">
             {busy ? 'Checking…' : <>Enter the back of house <ArrowRight size={14} /></>}
@@ -200,8 +200,8 @@ export function AuthPage({ mode, onDone, onSwitch }: { mode: Mode; onDone: () =>
 
       <form onSubmit={submit} className="space-y-3">
         {mode === 'signup' && <Field icon={UserIcon} label="Full name" value={name} onChange={setName} placeholder="June Park" />}
-        <Field icon={Mail} label="Email" value={email} onChange={setEmail} placeholder="you@studio.com" required />
-        <Field icon={Lock} type="password" label="Password" value={pw} onChange={setPw} placeholder="••••••••" required />
+        <Field icon={Mail} label="Email" type="email" autoComplete="username" value={email} onChange={setEmail} placeholder="you@studio.com" required />
+        <Field icon={Lock} type="password" label="Password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} value={pw} onChange={setPw} placeholder="••••••••" required />
 
         {mode === 'signup' && role === 'seller' && (
           <label className="flex items-center gap-2.5 hairline rounded-xl px-4 py-3 cursor-pointer hover:border-accent transition-colors">
@@ -241,7 +241,11 @@ function ErrorNote({ message }: { message: string }) {
   );
 }
 
-function Field({ icon: Icon, label, value, onChange, type = 'text', placeholder, required }: { icon: any; label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; required?: boolean }) {
+function Field({ icon: Icon, label, value, onChange, type = 'text', placeholder, required, autoComplete }: { icon: any; label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; required?: boolean; autoComplete?: string }) {
+  // An address field must never be auto-capitalised or autocorrected: the
+  // backend matches the row on an exact string, so a keyboard-supplied capital
+  // turns a valid login into "Incorrect email or password".
+  const isEmail = type === 'email';
   return (
     <label className="block">
       <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted mb-1.5">{label}</div>
@@ -250,6 +254,8 @@ function Field({ icon: Icon, label, value, onChange, type = 'text', placeholder,
         <input
           value={value} onChange={(e) => onChange(e.target.value)} type={type} placeholder={placeholder}
           required={required}
+          autoComplete={autoComplete}
+          {...(isEmail ? { autoCapitalize: 'none', autoCorrect: 'off', spellCheck: false } : {})}
           className="flex-1 bg-transparent outline-none h-11 text-sm"
         />
       </div>

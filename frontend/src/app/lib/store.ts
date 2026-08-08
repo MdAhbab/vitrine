@@ -435,6 +435,9 @@ export const useStore = create<State>((set, get) => ({
         category: l.category,
         framework: l.framework,
         price: l.price,
+        // Tiers are a separate table server-side. They have to travel with the
+        // rest of the patch or the seller's pricing ladder is dropped on save.
+        tiers: l.tiers ?? [],
         description: l.description,
         cover: l.cover,
         screenshots: l.screenshots,

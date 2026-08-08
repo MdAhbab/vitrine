@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { Key, Sparkles, Shield, ToggleLeft, ToggleRight, Plus, Trash2, Eye, EyeOff, Sliders, Mail, Save, Bot, Receipt, ScrollText, Settings2 } from 'lucide-react';
 import { useStore, type AdminApiKey } from '../lib/store';
+import { mediaUrl } from '../lib/api';
 import { PromptDialog, type PromptRequest } from './PromptDialog';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
@@ -199,7 +200,7 @@ export function CuratorConsole() {
                         }}
                         className="rounded border-border-c text-accent focus:ring-accent"
                       />
-                      <img src={l.cover} alt="" className="w-8 h-8 rounded object-cover" />
+                      <img src={mediaUrl(l.cover)} alt="" className="w-8 h-8 rounded object-cover" />
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium truncate">{l.name}</div>
                         <div className="text-xs text-text-muted truncate">{l.category} · ${l.price.toLocaleString()}</div>

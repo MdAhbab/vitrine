@@ -2,6 +2,7 @@ import { motion } from 'motion/react';
 import { ArrowRight, Sparkles, ChevronRight } from 'lucide-react';
 import { type Product } from '../lib/mockData';
 import { useCatalogProducts, useStore } from '../lib/store';
+import { mediaUrl } from '../lib/api';
 import { ProductCard } from '../components/ProductCard';
 import useEmblaCarousel from 'embla-carousel-react';
 import { useMemo, useState, useEffect } from 'react';
@@ -130,7 +131,7 @@ export function Home({
                 <div className="flex h-full">
                   {featuredProducts.map((prod) => (
                     <div key={prod.id} className="relative flex-[0_0_100%] min-w-0 h-full">
-                      <img src={prod.cover} alt="" className="w-full h-full object-cover select-none" />
+                      <img src={mediaUrl(prod.cover)} alt="" className="w-full h-full object-cover select-none" />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
                       
                       <div className="absolute top-5 left-5 right-5 flex items-center justify-between text-white/90 font-mono text-[10px] uppercase tracking-[0.25em] z-10 pointer-events-none">

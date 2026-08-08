@@ -8,7 +8,12 @@ const map = {
 } as const;
 
 export function Badge({ kind, overlay = false }: { kind: keyof typeof map; overlay?: boolean }) {
-  const { label, icon: Icon } = map[kind];
+  // Badges are unvalidated JSON from the API, so the declared union is a hope,
+  // not a guarantee. An unknown kind used to destructure `undefined` and take
+  // the whole page down with it.
+  const entry = map[kind];
+  if (!entry) return null;
+  const { label, icon: Icon } = entry;
   const isAccent = kind === 'best-ui';
 
   if (overlay && (kind === 'verified' || kind === 'live-demo')) {

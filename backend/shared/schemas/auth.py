@@ -1,17 +1,33 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 
 
-class SignupIn(BaseModel):
+class _EmailNormalized(BaseModel):
+    """Fold the address to lowercase before it reaches a lookup.
+
+    The user row is matched with an exact string comparison, so without this a
+    touch keyboard's auto-capitalisation ("Admin@vitrine.io") reads as a
+    different account and the login comes back 401. Signup normalises through
+    the same base, so an address can never be *stored* in a form that login
+    would fail to find.
+    """
+
     email: EmailStr
+
+    @field_validator("email", mode="after")
+    @classmethod
+    def _lower(cls, v: str) -> str:
+        return v.strip().lower()
+
+
+class SignupIn(_EmailNormalized):
     password: str
     display_name: str = ""
     role: str = "buyer"  # buyer | seller  (admin via /auth/admin/login only)
 
 
-class LoginIn(BaseModel):
-    email: EmailStr
+class LoginIn(_EmailNormalized):
     password: str
 
 

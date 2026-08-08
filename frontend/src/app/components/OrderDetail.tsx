@@ -1,6 +1,7 @@
 import { X, KeyRound, Play, Copy, Clock } from 'lucide-react';
 import { Dialog } from './Dialog';
 import { useStore, type Order, type Transaction } from '../lib/store';
+import { mediaUrl } from '../lib/api';
 
 export function OrderDetail({
   order, onClose, onOpenProduct, onPreview,
@@ -33,7 +34,7 @@ export function OrderDetail({
           {/* Product banner */}
           {product ? (
             <div className="relative aspect-[16/7]">
-              <img src={product.cover} alt="" className="absolute inset-0 w-full h-full object-cover" />
+              <img src={mediaUrl(product.cover)} alt="" className="absolute inset-0 w-full h-full object-cover" />
               <div className="absolute inset-0 bg-gradient-to-t from-bg via-bg/40 to-transparent" />
               <div className="absolute bottom-5 left-6 right-6">
                 <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/85">{product.category}</div>

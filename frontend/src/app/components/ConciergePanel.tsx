@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, X, ArrowRight, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { type Product } from '../lib/mockData';
-import { conciergeStream, USE_MOCKS } from '../lib/api';
+import { conciergeStream, mediaUrl, USE_MOCKS } from '../lib/api';
 import { useStore, useCatalogProducts } from '../lib/store';
 
 type Msg =
@@ -250,7 +250,7 @@ export function ConciergePanel({ open, onClose, onOpenProduct }: { open: boolean
                               onClick={() => onOpenProduct(r.slug)}
                               className="w-full text-left hairline rounded-xl bg-surface p-3 flex gap-3 hover:border-accent transition-colors group"
                             >
-                              <img src={r.cover} alt="" className="w-16 h-16 rounded-lg object-cover" />
+                              <img src={mediaUrl(r.cover)} alt="" className="w-16 h-16 rounded-lg object-cover" />
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="font-serif text-base truncate">{r.name}</span>

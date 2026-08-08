@@ -10,7 +10,7 @@ export const USE_MOCKS = (import.meta.env.VITE_USE_MOCKS ?? 'false') === 'true';
 const MEDIA_BASE = import.meta.env.VITE_MEDIA_BASE ?? (import.meta.env.DEV ? DEV_DIRECT_BASE : '');
 
 /** Resolve relative `/files/…` paths to the API origin for img src. */
-export function mediaUrl(path: string): string {
+export function mediaUrl(path: string | null | undefined): string {
   if (!path) return '';
   if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) return path;
   const base = MEDIA_BASE || BASES[0] || '';

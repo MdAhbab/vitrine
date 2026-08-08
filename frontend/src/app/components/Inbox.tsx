@@ -119,7 +119,7 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
               onClick={() => setActiveId(t.id)}
               className={`w-full text-left p-4 flex gap-3 border-b transition-colors ${activeId === t.id ? 'bg-surface' : 'hover:bg-surface'}`}
             >
-              <img src={t.productCover} alt="" className="w-10 h-10 rounded-lg object-cover" />
+              <img src={mediaUrl(t.productCover)} alt="" className="w-10 h-10 rounded-lg object-cover" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-serif text-sm truncate flex-1">{t.productName}</span>
@@ -142,7 +142,7 @@ export function Inbox({ role, viewer }: { role: Role; viewer: { id: string; name
           <>
             <header className="px-6 py-4 border-b flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                <img src={active.productCover} alt="" className="w-10 h-10 rounded-lg object-cover" />
+                <img src={mediaUrl(active.productCover)} alt="" className="w-10 h-10 rounded-lg object-cover" />
                 <div className="min-w-0">
                   <div className="font-serif text-base truncate">{active.productName}</div>
                   <div className="font-mono text-[10px] uppercase tracking-wider text-text-muted">

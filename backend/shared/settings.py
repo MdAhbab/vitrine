@@ -58,6 +58,23 @@ class Settings(BaseSettings):
     )
     GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
 
+    # ollama (local, last-resort provider) --------------------------------
+    # Appended AFTER the hosted providers, so a working OpenAI/Gemini key
+    # always wins. It only ever answers when those are absent or failing —
+    # which is the whole point: no key, no quota, no bill, but also no
+    # network round-trip to fall back on if the local daemon is down.
+    #
+    # OLLAMA_MODEL must clear two bars, both verified by measurement rather
+    # than by the model card: it emits real `tool_calls` (Repo-Intake and
+    # Verification dispatch typed tools), and it puts its answer in `content`
+    # rather than a `reasoning` field. qwen2.5 clears both; llama3.2 emits a
+    # malformed tool call as text, and qwen3's thinking mode leaves `content`
+    # empty. See .env for the full comparison.
+    OLLAMA_ENABLED: bool = True
+    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
+    OLLAMA_MODEL: str = "qwen2.5:3b"
+    OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
+
     # commerce -----------------------------------------------------------
     PAYMENT_PROVIDER: str = "mock"      # mock | stripe
     STRIPE_SECRET_KEY: str = ""
