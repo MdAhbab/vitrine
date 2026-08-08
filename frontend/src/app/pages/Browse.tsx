@@ -136,23 +136,9 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
 
   return (
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 pt-12 pb-24">
-      <div className="flex items-end justify-between gap-6 flex-wrap mb-10">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-text-muted">The Gallery</div>
-          <h1 className="font-serif mt-3">Browse the collection</h1>
-          <p className="text-text-muted mt-3 text-sm">
-            {filtered.length} pieces on display · showing {rangeStart}-{rangeEnd} · max {PAGE_SIZE} per page
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setOpenFilters(true)}
-            className="lg:hidden hairline rounded-full px-3 h-9 text-sm flex items-center gap-1.5"
-          >
-            <SlidersHorizontal size={13} /> Filters
-          </button>
-          <SortMenu value={sort} onChange={setSort} />
-        </div>
+      <div className="mb-10">
+        <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-text-muted">The Gallery</div>
+        <h1 className="font-serif mt-3">Browse the collection</h1>
       </div>
 
       {showShowcase && (
@@ -190,6 +176,25 @@ export function Browse({ onOpenProduct, onPreview, onBargain }: { onOpenProduct:
           </div>
         </motion.section>
       )}
+
+      {/* Sits below the showcase, directly above the results it describes.
+          "showing 1-18 of 42" counts the grid only — the showcase pieces are a
+          separate curated shelf — so reading it above them invited the count to
+          be read as covering both. */}
+      <div className="flex items-end justify-between gap-6 flex-wrap mb-8">
+        <p className="text-text-muted text-sm">
+          {filtered.length} pieces on display · showing {rangeStart}-{rangeEnd} · max {PAGE_SIZE} per page
+        </p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setOpenFilters(true)}
+            className="lg:hidden hairline rounded-full px-3 h-9 text-sm flex items-center gap-1.5"
+          >
+            <SlidersHorizontal size={13} /> Filters
+          </button>
+          <SortMenu value={sort} onChange={setSort} />
+        </div>
+      </div>
 
       <div className="grid lg:grid-cols-[220px_1fr] gap-10">
         <aside className="hidden lg:block sticky top-24 self-start">{Filters}</aside>
